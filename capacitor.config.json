@@ -1,0 +1,30 @@
+{
+  "appId": "es.temazo.app",
+  "appName": "Temazo",
+  "webDir": "www",
+  "server": {
+    "url": "https://temazo.es/",
+    "cleartext": false,
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "allowNavigation": [
+      "*.temazo.es",
+      "temazo.es",
+      "*.youtube.com",
+      "*.youtube-nocookie.com",
+      "*.googlevideo.com",
+      "*.ggpht.com",
+      "*.googleusercontent.com",
+      "*.ytimg.com"
+    ]
+  },
+  "ios": {
+    "scheme": "Temazo",
+    "contentInset": "always",
+    "preferredContentMode": "mobile",
+    "allowsLinkPreview": false,
+    "scrollEnabled": true,
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {}
+}
