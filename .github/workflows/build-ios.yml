@@ -24,25 +24,52 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync ios
 
-      - name: Pod install
+      - name: Detect project file (SPM-based Capacitor 8 vs Pods)
+        id: detect
+        working-directory: ios/App
+        run: |
+          if [ -f "App.xcworkspace/contents.xcworkspacedata" ] && [ -f "Podfile" ]; then
+            echo "using_pods=true" >> $GITHUB_OUTPUT
+            echo "Detected Podfile + workspace"
+          else
+            echo "using_pods=false" >> $GITHUB_OUTPUT
+            echo "No Podfile — using SPM"
+          fi
+          ls -la
+
+      - name: Pod install (if needed)
+        if: steps.detect.outputs.using_pods == 'true'
         working-directory: ios/App
         run: pod install --repo-update
 
       - name: Build unsigned archive
         working-directory: ios/App
         run: |
-          xcodebuild \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath $PWD/build/App.xcarchive \
-            archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            -quiet
+          if [ "${{ steps.detect.outputs.using_pods }}" = "true" ]; then
+            xcodebuild \
+              -workspace App.xcworkspace \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath $PWD/build/App.xcarchive \
+              archive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM=""
+          else
+            xcodebuild \
+              -project App.xcodeproj \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath $PWD/build/App.xcarchive \
+              archive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM=""
+          fi
 
       - name: Package as IPA
         working-directory: ios/App
