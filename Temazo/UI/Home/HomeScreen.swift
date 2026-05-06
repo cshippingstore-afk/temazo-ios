@@ -73,34 +73,6 @@ struct HomeScreen: View {
     }
 }
 
-private struct LiveIndicator: View {
-    let minutes: Int?
-    @State private var pulse = false
-
-    var color: Color {
-        guard let m = minutes else { return .textMuted }
-        if m < 30 { return .liveGreen }
-        if m < 120 { return .liveAmber }
-        return .liveRed
-    }
-
-    var label: String {
-        if let m = minutes { return "LIVE · actualizado hace \(m)m" }
-        return "LIVE"
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8)
-                .scaleEffect(pulse ? 1.3 : 1.0)
-                .opacity(pulse ? 0.7 : 1.0)
-                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                .onAppear { pulse = true }
-            Text(label).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
-        }
-    }
-}
-
 private struct GenreChips: View {
     let genres: [GenreItem]
     let selected: String

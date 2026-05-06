@@ -52,8 +52,16 @@ struct TrackRow: View {
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isCurrent ? Color.neonPink.opacity(0.10) : Color.bgSurface)
+                    .fill(isCurrent
+                        ? LinearGradient(colors: [Color.neonPink.opacity(0.15), Color.neonPurple.opacity(0.08)],
+                                          startPoint: .leading, endPoint: .trailing)
+                        : LinearGradient(colors: [Color.bgSurface, Color.bgSurface], startPoint: .leading, endPoint: .trailing))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(isCurrent ? Color.neonPink.opacity(0.5) : Color.clear, lineWidth: 1)
+                    )
             )
+            .shadow(color: isCurrent ? Color.neonPink.opacity(0.3) : Color.clear, radius: 10)
         }
         .buttonStyle(.plain)
     }

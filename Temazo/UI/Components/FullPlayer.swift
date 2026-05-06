@@ -6,9 +6,9 @@ struct FullPlayer: View {
     @EnvironmentObject var favorites: FavoritesRepo
 
     @State private var showLyrics = false
+    @State private var showPlaylists = false
     @State private var lyrics: [LyricLine] = []
-    @State private var lyricsLoaded = false
-    @State private var seekValue: Float = 0
+    @State private var seekValue: Double = 0
     @State private var isSeeking = false
 
     var body: some View {
@@ -21,26 +21,8 @@ struct FullPlayer: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 14) {
-                    // Top bar
-                    HStack {
-                        Button { onClose() } label: {
-                            Image(systemName: "chevron.down").font(.system(size: 22))
-                                .foregroundStyle(.white)
-                        }
-                        Spacer()
-                        Text("REPRODUCIENDO")
-                            .font(.system(size: 10, weight: .bold)).tracking(1.5)
-                            .foregroundStyle(.textMid)
-                        Spacer()
-                        Button { /* queue */ } label: {
-                            Image(systemName: "list.bullet").font(.system(size: 20))
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 8)
+                    topBar(closeAction: onClose)
 
-                    // Cover OR Lyrics
                     if showLyrics {
                         LyricsView(lines: lyrics, posSec: player.state.positionSec) { sec in
                             player.seekTo(seconds: sec)
@@ -49,100 +31,160 @@ struct FullPlayer: View {
                         .padding(.horizontal, 18)
                     } else {
                         Spacer(minLength: 4)
-                        CoverImage(url: t.coverUrl, size: 320, cornerRadius: 20)
-                            .shadow(color: Color.neonPink.opacity(0.3), radius: 30, y: 10)
+                        cover(track: t)
                         Spacer(minLength: 4)
                     }
 
-                    // Title + artist
-                    VStack(spacing: 4) {
-                        Text(t.title).font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(.white).multilineTextAlignment(.center)
-                            .lineLimit(2)
-                        Text(t.artistName ?? "").font(.system(size: 14))
-                            .foregroundStyle(.textMid)
-                    }
-                    .padding(.horizontal, 18)
+                    titleBlock(track: t)
 
-                    // Progress slider
-                    VStack(spacing: 4) {
-                        Slider(
-                            value: Binding(
-                                get: { isSeeking ? Double(seekValue) : Double(player.state.positionSec) },
-                                set: { v in seekValue = Float(v); isSeeking = true }
-                            ),
-                            in: 0...Double(max(player.state.durationSec, 1)),
-                            onEditingChanged: { editing in
-                                if !editing {
-                                    player.seekTo(seconds: seekValue)
-                                    isSeeking = false
-                                }
-                            }
-                        )
-                        .tint(.neonPink)
-                        HStack {
-                            Text(format(player.state.positionSec)).font(.system(size: 11)).foregroundStyle(.textLow)
-                            Spacer()
-                            Text(format(player.state.durationSec)).font(.system(size: 11)).foregroundStyle(.textLow)
-                        }
-                    }
-                    .padding(.horizontal, 18)
+                    progressBar()
+                        .padding(.horizontal, 18)
 
-                    // Controls
-                    HStack(spacing: 30) {
-                        Button { player.prev() } label: {
-                            Image(systemName: "backward.fill").font(.system(size: 30))
-                                .foregroundStyle(.white)
-                        }
-                        Button { player.togglePlay() } label: {
-                            Image(systemName: player.state.isPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 38)).foregroundStyle(.white)
-                                .frame(width: 76, height: 76)
-                                .background(Circle().fill(Color.neonPink))
-                        }
-                        Button { player.next() } label: {
-                            Image(systemName: "forward.fill").font(.system(size: 30))
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    .padding(.vertical, 8)
+                    transportRow()
+                        .padding(.vertical, 8)
 
-                    // Bottom row: fav + lyrics toggle
-                    HStack(spacing: 30) {
-                        Button { favorites.toggle(t.id) } label: {
-                            Image(systemName: isFav ? "heart.fill" : "heart")
-                                .font(.system(size: 24))
-                                .foregroundStyle(isFav ? Color.neonPink : Color.textMid)
-                        }
-                        Button { showLyrics.toggle() } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "text.alignleft")
-                                Text("Letra").font(.system(size: 13, weight: .semibold))
-                            }
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(Capsule().fill(showLyrics ? Color.neonPink : Color.bgSurfaceHi))
-                            .foregroundStyle(.white)
-                        }
-                    }
-                    .padding(.bottom, 24)
+                    bottomActions(isFav: isFav, trackId: t.id)
+                        .padding(.bottom, 24)
                 }
             }
             .task(id: t.id) { await loadLyrics(trackId: t.id) }
+            .sheet(isPresented: $showPlaylists) {
+                PlaylistPickerSheet(onClose: { showPlaylists = false })
+            }
         )
     }
 
+    // MARK: - Subviews
+
+    private func topBar(closeAction: @escaping () -> Void) -> some View {
+        HStack {
+            Button { closeAction() } label: {
+                Image(systemName: "chevron.down").font(.system(size: 22))
+                    .foregroundStyle(.white)
+            }
+            Spacer()
+            Text("REPRODUCIENDO")
+                .font(.system(size: 10, weight: .bold)).tracking(1.5)
+                .foregroundStyle(.textMid)
+            Spacer()
+            Button { showPlaylists = true } label: {
+                Image(systemName: "music.note.list").font(.system(size: 20))
+                    .foregroundStyle(.white)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
+    }
+
+    private func cover(track: Track) -> some View {
+        CoverImage(url: track.coverUrl, size: 320, cornerRadius: 20)
+            .shadow(color: Color.neonPink.opacity(0.5), radius: 40, y: 12)
+            .shadow(color: Color.neonPurple.opacity(0.3), radius: 60, y: 20)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(LinearGradient(colors: [.neonPink.opacity(0.6), .neonPurple.opacity(0.3)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            lineWidth: 1.5)
+            )
+    }
+
+    private func titleBlock(track: Track) -> some View {
+        VStack(spacing: 4) {
+            Text(track.title).font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white).multilineTextAlignment(.center)
+                .lineLimit(2)
+            Text(track.artistName ?? "").font(.system(size: 14))
+                .foregroundStyle(.textMid)
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private func progressBar() -> some View {
+        VStack(spacing: 4) {
+            NeonSlider(
+                value: Binding(
+                    get: { isSeeking ? seekValue : Double(player.state.positionSec) },
+                    set: { seekValue = $0 }
+                ),
+                bounds: 0...Double(max(player.state.durationSec, 1)),
+                onEditingChanged: { editing in
+                    if editing {
+                        isSeeking = true
+                    } else {
+                        player.seekTo(seconds: Float(seekValue))
+                        isSeeking = false
+                    }
+                }
+            )
+            HStack {
+                Text(format(player.state.positionSec)).font(.system(size: 11)).foregroundStyle(.textLow)
+                Spacer()
+                Text(format(player.state.durationSec)).font(.system(size: 11)).foregroundStyle(.textLow)
+            }
+        }
+    }
+
+    private func transportRow() -> some View {
+        HStack(spacing: 30) {
+            Button { player.prev() } label: {
+                Image(systemName: "backward.fill").font(.system(size: 30))
+                    .foregroundStyle(.white)
+            }
+            Button { player.togglePlay() } label: {
+                Image(systemName: player.state.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 38)).foregroundStyle(.white)
+                    .frame(width: 76, height: 76)
+                    .background(Circle().fill(Color.neonPink))
+                    .shadow(color: .neonPink.opacity(0.7), radius: 18, y: 0)
+            }
+            Button { player.next() } label: {
+                Image(systemName: "forward.fill").font(.system(size: 30))
+                    .foregroundStyle(.white)
+            }
+        }
+    }
+
+    private func bottomActions(isFav: Bool, trackId: Int64) -> some View {
+        HStack(spacing: 20) {
+            Button { favorites.toggle(trackId) } label: {
+                Image(systemName: isFav ? "heart.fill" : "heart")
+                    .font(.system(size: 22))
+                    .foregroundStyle(isFav ? Color.neonPink : Color.textMid)
+                    .padding(10)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+            }
+
+            Button { showLyrics.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "text.alignleft")
+                    Text("Letra").font(.system(size: 13, weight: .semibold))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Capsule().fill(showLyrics ? Color.neonPink : Color.white.opacity(0.08)))
+                .foregroundStyle(.white)
+                .shadow(color: showLyrics ? .neonPink.opacity(0.5) : .clear, radius: 8)
+            }
+
+            Button { showPlaylists = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "music.note.list")
+                    Text("Playlist").font(.system(size: 13, weight: .semibold))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+                .foregroundStyle(.white)
+            }
+        }
+    }
+
     private func loadLyrics(trackId: Int64) async {
-        lyricsLoaded = false
         lyrics = []
         do {
             let resp = try await TemazoAPI.shared.lyrics(trackId)
             if let lrc = resp.synced, !lrc.isEmpty {
                 lyrics = LRCParser.parse(lrc)
             }
-            lyricsLoaded = true
-        } catch {
-            lyricsLoaded = true
-        }
+        } catch {}
     }
 
     private func format(_ sec: Float) -> String {

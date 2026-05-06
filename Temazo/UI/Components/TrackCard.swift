@@ -13,6 +13,11 @@ struct TrackCard: View {
                 ZStack(alignment: .topLeading) {
                     CoverImage(url: track.coverUrl, size: 150, cornerRadius: 12)
                         .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(isCurrent ? Color.neonPink : Color.borderSoft.opacity(0.5),
+                                        lineWidth: isCurrent ? 2 : 1)
+                        )
+                        .overlay(
                             Group {
                                 if isCurrent && isPlaying {
                                     Rectangle().fill(Color.black.opacity(0.4))
@@ -20,13 +25,18 @@ struct TrackCard: View {
                                 }
                             }
                         )
+                        .shadow(color: isCurrent ? Color.neonPink.opacity(0.6) : Color.clear,
+                                radius: isCurrent ? 16 : 0, y: 0)
+                        .shadow(color: rank <= 3 ? rankGlow(rank).opacity(0.35) : Color.clear,
+                                radius: 12)
 
                     HStack(spacing: 4) {
                         Text("#\(rank)")
                             .font(.system(size: 11, weight: .bold))
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(Color.bgRoot.opacity(0.8)))
-                            .foregroundStyle(rankColor(rank))
+                            .background(Capsule().fill(Color.bgRoot.opacity(0.85)))
+                            .foregroundStyle(rankGlow(rank))
+                            .shadow(color: rankGlow(rank).opacity(0.5), radius: 4)
                     }
                     .padding(8)
                 }
@@ -45,7 +55,7 @@ struct TrackCard: View {
         .buttonStyle(.plain)
     }
 
-    private func rankColor(_ r: Int) -> Color {
+    private func rankGlow(_ r: Int) -> Color {
         switch r {
         case 1: return .medalGold
         case 2: return .medalSilver
