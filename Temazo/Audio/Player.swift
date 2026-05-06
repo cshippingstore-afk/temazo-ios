@@ -96,7 +96,12 @@ final class Player: NSObject, ObservableObject {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        cfg.allowsPictureInPictureMediaPlayback = true
         cfg.suppressesIncrementalRendering = false
+        // Mantener proceso WebContent vivo (no suspender)
+        if #available(iOS 17.0, *) {
+            cfg.preferences.isElementFullscreenEnabled = true
+        }
 
         // Inyectar polyfill: el HTML llama window.AndroidBridge.onReady() etc.
         // Lo redirigimos al messageHandler nativo "TemazoBridge".
@@ -116,8 +121,11 @@ final class Player: NSObject, ObservableObject {
         cfg.userContentController.addUserScript(userScript)
         cfg.userContentController.add(BridgeProxy(parent: self), name: "TemazoBridge")
 
-        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 4, height: 4), configuration: cfg)
-        wv.isHidden = true
+        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 8, height: 8), configuration: cfg)
+        // CRITICAL para background audio: NO hidden, alpha minimal pero >0
+        // (iOS suspende el WebContent process si la WebView está marcada hidden)
+        wv.isHidden = false
+        wv.alpha = 0.01
         wv.isUserInteractionEnabled = false
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) TemazoApp/1.0 Mobile"
         wv.allowsBackForwardNavigationGestures = false
@@ -125,11 +133,25 @@ final class Player: NSObject, ObservableObject {
         wv.navigationDelegate = self
         webView = wv
 
-        // Adjuntar a una ventana visible (4×4 px) para que iOS no lo suspenda.
+        // Adjuntar a una ventana visible (8×8 px) para que iOS no lo suspenda.
         attachToWindow()
+
+        // Re-adjuntar al volver a foreground (por si keyWindow cambió)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
 
         // Pre-warm: cargar la página vacía antes del primer track.
         wv.load(URLRequest(url: playerURL))
+    }
+
+    @objc private func handleAppActive() {
+        attachToWindow()
+        // Re-activar audio session por si iOS la perdió
+        AudioSessionManager.shared.ensureActive()
     }
 
     private func attachToWindow() {
@@ -139,11 +161,14 @@ final class Player: NSObject, ObservableObject {
                 .compactMap({ $0 as? UIWindowScene })
                 .flatMap({ $0.windows })
                 .first(where: { $0.isKeyWindow }) {
-                if wv.superview == nil {
+                if wv.superview != win {
+                    wv.removeFromSuperview()
                     wv.translatesAutoresizingMaskIntoConstraints = true
-                    wv.frame = CGRect(x: 0, y: 0, width: 4, height: 4)
+                    // 8x8 visible en esquina top-left, pero alpha 0.01 → invisible al usuario
+                    wv.frame = CGRect(x: 0, y: 0, width: 8, height: 8)
                     win.addSubview(wv)
-                    win.sendSubviewToBack(wv)
+                    // bringSubviewToFront: el WebView en TOP del z-order para asegurar que su layer renderiza
+                    win.bringSubviewToFront(wv)
                 }
             }
         }

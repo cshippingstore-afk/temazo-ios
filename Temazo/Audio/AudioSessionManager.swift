@@ -26,17 +26,27 @@ final class AudioSessionManager {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            // .playback = audio primario (como Spotify/Apple Music). NO uses mixWithOthers.
-            // .allowAirPlay y .allowBluetoothA2DP permiten salida a coche/auriculares BT.
+            // .playback + .moviePlayback mode = optimizado para video (YouTube iframe es video).
+            // RouteSharingPolicy.longFormAudio le dice a iOS "esto es contenido largo de audio"
+            // → prioriza mantenerlo vivo en background.
             try session.setCategory(
                 .playback,
-                mode: .default,
+                mode: .moviePlayback,
+                policy: .longFormAudio,
                 options: [.allowAirPlay, .allowBluetoothA2DP]
             )
             try session.setActive(true, options: [])
-            print("[AudioSession] configured: category=\(session.category) options=\(session.categoryOptions.rawValue)")
+            print("[AudioSession] configured: category=\(session.category) mode=\(session.mode) policy=longFormAudio")
         } catch {
-            print("[AudioSession] configure error: \(error)")
+            // Fallback: si .longFormAudio no funciona en este device, usar default
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
+                try session.setActive(true, options: [])
+                print("[AudioSession] fallback configured: \(session.category) mode=\(session.mode)")
+            } catch {
+                print("[AudioSession] configure error: \(error)")
+            }
         }
 
         NotificationCenter.default.addObserver(

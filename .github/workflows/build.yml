@@ -73,13 +73,10 @@ jobs:
       - name: Generate silent.m4a (background audio keepalive)
         run: |
           OUT=Temazo/Resources/silent.m4a
-          if [ ! -f "$OUT" ]; then
-            ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -c:a aac -b:a 32k "$OUT" -y >/dev/null 2>&1 || true
-            if [ ! -f "$OUT" ]; then
-              brew install ffmpeg
-              ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -c:a aac -b:a 32k "$OUT" -y
-            fi
-          fi
+          rm -f "$OUT"
+          # 30 seg de silencio @ 44.1kHz stereo AAC — más largo = menos seeks del AVPlayer al loopear
+          command -v ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t 30 -c:a aac -b:a 64k "$OUT" -y
           ls -lh "$OUT"
 
       - name: Generate Xcode project (XcodeGen)
