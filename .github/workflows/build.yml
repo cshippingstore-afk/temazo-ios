@@ -45,14 +45,12 @@ jobs:
           ICON=Temazo/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
           mkdir -p "$(dirname "$ICON")"
           if [ ! -f "$ICON" ]; then
-            # Pink background con letra T blanca, 1024x1024 (Apple lo exige para distribución)
+            # Pink solid 1024x1024 — Apple solo exige tamaño + sin transparencia
+            command -v magick >/dev/null 2>&1 || brew install imagemagick
             if command -v magick >/dev/null 2>&1; then
-              magick -size 1024x1024 xc:'#FF2E93' -gravity center -pointsize 700 -fill white -annotate +0+0 'T' "$ICON"
-            elif command -v convert >/dev/null 2>&1; then
-              convert -size 1024x1024 xc:'#FF2E93' -gravity center -pointsize 700 -fill white -annotate +0+0 'T' "$ICON"
+              magick -size 1024x1024 xc:'#FF2E93' "$ICON"
             else
-              brew install imagemagick
-              magick -size 1024x1024 xc:'#FF2E93' -gravity center -pointsize 700 -fill white -annotate +0+0 'T' "$ICON"
+              convert -size 1024x1024 xc:'#FF2E93' "$ICON"
             fi
           fi
           ls -lh "$ICON"
