@@ -74,9 +74,12 @@ jobs:
         run: |
           OUT=Temazo/Resources/silent.m4a
           rm -f "$OUT"
-          # 30 seg de silencio @ 44.1kHz stereo AAC — más largo = menos seeks del AVPlayer al loopear
           command -v ffmpeg >/dev/null 2>&1 || brew install ffmpeg
-          ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t 30 -c:a aac -b:a 64k "$OUT" -y
+          # Near-silent sine wave (no anullsrc) — iOS necesita que sea audio REAL,
+          # no zeros, para reconocer el silent loop como producción de audio.
+          # Sine 1Hz a -60dB → audible amplitude pero imperceptible al usuario.
+          ffmpeg -f lavfi -i "sine=frequency=1:sample_rate=44100:duration=30" \
+            -af "volume=-60dB" -ac 2 -c:a aac -b:a 64k "$OUT" -y
           ls -lh "$OUT"
 
       - name: Generate Xcode project (XcodeGen)

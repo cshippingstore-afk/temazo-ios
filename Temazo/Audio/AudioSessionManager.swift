@@ -18,6 +18,11 @@ final class AudioSessionManager {
     private var silentLooper: NSObjectProtocol?
     private(set) var configured = false
 
+    // AVAudioEngine para producción continua de audio (más robusto que AVPlayer)
+    private var engine: AVAudioEngine?
+    private var engineNode: AVAudioPlayerNode?
+    private var engineBuffer: AVAudioPCMBuffer?
+
     private init() {}
 
     func configure() {
@@ -75,46 +80,91 @@ final class AudioSessionManager {
     // MARK: - Silent keepalive (truco para background con WKWebView)
 
     func startSilentLoop() {
-        guard silentPlayer == nil else { return }
-        guard let url = Bundle.main.url(forResource: "silent", withExtension: "m4a")
-                ?? Bundle.main.url(forResource: "silent", withExtension: "wav")
-                ?? Bundle.main.url(forResource: "silent", withExtension: "caf") else {
-            print("[AudioSession] silent audio asset NOT FOUND in bundle — background may stop")
-            return
-        }
-
-        // AVPlayer (no AVAudioPlayer): corre en proceso separado, sobrevive background mejor
-        let item = AVPlayerItem(url: url)
-        let player = AVPlayer(playerItem: item)
-        player.volume = 0.001                 // casi inaudible pero >0 (iOS requiere audio real)
-        player.actionAtItemEnd = .none        // no detener al final, el observer lo loopea
-        player.allowsExternalPlayback = false
-        player.preventsDisplaySleepDuringVideoPlayback = false
-
-        // Loop manual — cuando termina el item, rebobinar y seguir
-        silentLooper = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak player] _ in
-            player?.seek(to: .zero)
-            player?.play()
-        }
-
         ensureActive()
-        player.play()
-        silentPlayer = player
-        print("[AudioSession] silent loop STARTED")
+        startEngine()
+        startSilentPlayer()
     }
 
     func stopSilentLoop() {
+        stopSilentPlayer()
+        stopEngine()
+    }
+
+    // MARK: - AVAudioEngine (producción continua de audio para evitar suspensión)
+
+    private func startEngine() {
+        guard engine == nil else { return }
+        let eng = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        eng.attach(player)
+
+        // Buffer de sine wave casi-silente (-50dB) que loopea sin parar
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        let frameCount = AVAudioFrameCount(44100)  // 1 segundo
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            print("[AudioEngine] no buffer"); return
+        }
+        buffer.frameLength = frameCount
+        if let chData = buffer.floatChannelData {
+            let amplitude: Float = 0.003  // ~-50dB, casi inaudible pero audio real
+            for ch in 0..<Int(format.channelCount) {
+                for i in 0..<Int(frameCount) {
+                    chData[ch][i] = amplitude * sinf(2 * .pi * 1.0 * Float(i) / 44100.0)
+                }
+            }
+        }
+
+        eng.connect(player, to: eng.mainMixerNode, format: format)
+        do {
+            try eng.start()
+            player.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
+            player.play()
+            engine = eng
+            engineNode = player
+            engineBuffer = buffer
+            print("[AudioEngine] STARTED (continuous audio production)")
+        } catch {
+            print("[AudioEngine] start error: \(error)")
+        }
+    }
+
+    private func stopEngine() {
+        engineNode?.stop()
+        engine?.stop()
+        engine = nil
+        engineNode = nil
+        engineBuffer = nil
+        print("[AudioEngine] STOPPED")
+    }
+
+    // MARK: - AVPlayer fallback con archivo silent.m4a (segunda capa de keep-alive)
+
+    private func startSilentPlayer() {
+        guard silentPlayer == nil else { return }
+        guard let url = Bundle.main.url(forResource: "silent", withExtension: "m4a")
+                ?? Bundle.main.url(forResource: "silent", withExtension: "wav") else { return }
+        let item = AVPlayerItem(url: url)
+        let p = AVPlayer(playerItem: item)
+        p.volume = 0.05  // suficiente para que iOS lo detecte
+        p.actionAtItemEnd = .none
+        p.allowsExternalPlayback = false
+        silentLooper = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak p] _ in
+            p?.seek(to: .zero); p?.play()
+        }
+        p.play()
+        silentPlayer = p
+        print("[AudioSession] silent AVPlayer STARTED")
+    }
+
+    private func stopSilentPlayer() {
         if let obs = silentLooper {
             NotificationCenter.default.removeObserver(obs)
             silentLooper = nil
         }
         silentPlayer?.pause()
         silentPlayer = nil
-        print("[AudioSession] silent loop STOPPED")
     }
 
     // MARK: - Interruption / route handlers
