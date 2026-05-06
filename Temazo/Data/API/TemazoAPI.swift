@@ -165,6 +165,15 @@ final class TemazoAPI {
         let req = request("api/lyrics_fetch.php", query: ["id": String(trackId)])
         return try await send(req, LyricsResponse.self)
     }
+
+    /// Pre-resolve YouTube URLs en backend (cache 4h). Fire-and-forget.
+    func prefetchYouTubeURLs(_ ytIds: [String]) {
+        for id in ytIds where !id.isEmpty {
+            let req = request("api/yt_resolve.php", query: ["id": id])
+            // Best-effort: dispara la peticion y olvida
+            session.dataTask(with: req) { _, _, _ in }.resume()
+        }
+    }
 }
 
 // MARK: - Response models

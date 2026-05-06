@@ -66,12 +66,14 @@ final class HomeViewModel: ObservableObject {
     private func silentRefresh(_ genre: String) async {
         do {
             let resp = try await TemazoAPI.shared.trendingByGenre(genre, limit: 50)
-            // Filtra los tracks sin youtubeId — no se pueden reproducir
             let valid = resp.tracks.filter { $0.youtubeId != nil && !($0.youtubeId ?? "").isEmpty }
             tracks = valid
             cache[genre] = valid
             lastUpdateMin = resp.lastUpdateMin
             error = nil
+            // Pre-resolve YouTube URLs en backend para los primeros 10 → tap play instantáneo
+            let topIds = valid.prefix(10).compactMap { $0.youtubeId }
+            TemazoAPI.shared.prefetchYouTubeURLs(Array(topIds))
         } catch {
             self.error = error.localizedDescription
         }
