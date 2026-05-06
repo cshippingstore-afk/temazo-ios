@@ -1,8 +1,30 @@
-node_modules/
-.DS_Store
-ios/App/Pods/
-ios/App/build/
-ios/App/Podfile.lock
-ios/App/.xcode.env.local
+# Swift / Xcode
+build/
+DerivedData/
 *.ipa
+*.dSYM
+*.app
 *.xcarchive
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+
+# XcodeGen genera el .xcodeproj/.xcworkspace — no los versionamos
+Temazo.xcodeproj/
+Temazo.xcworkspace/
+
+# macOS
+.DS_Store
+
+# Capacitor backup viejo (referencia, no se compila)
+_capacitor_backup/
+
+# Apple signing keys locales — NUNCA commitear
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+ExportOptions.plist
+
+# Node leftovers (legacy)
+node_modules/

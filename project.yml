@@ -1,0 +1,76 @@
+name: Temazo
+options:
+  bundleIdPrefix: es.temazo
+  deploymentTarget:
+    iOS: '16.0'
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  xcodeVersion: '16.0'
+
+settings:
+  base:
+    SWIFT_VERSION: '5.10'
+    DEVELOPMENT_TEAM: 4B8U4JJQ93
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: '1'
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: '-Onone'
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: '-O'
+
+targets:
+  Temazo:
+    type: application
+    platform: iOS
+    deploymentTarget: '16.0'
+    sources:
+      - path: Temazo
+    resources:
+      - path: Temazo/Resources
+    info:
+      path: Temazo/Info.plist
+      properties:
+        CFBundleDisplayName: Temazo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: es
+        UILaunchStoryboardName: ''
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes:
+          - audio
+        UIRequiredDeviceCapabilities:
+          - armv7
+        UIRequiresFullScreen: true
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIViewControllerBasedStatusBarAppearance: false
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSExceptionDomains:
+            youtube.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: false
+            youtube-nocookie.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: false
+        NSAppleMusicUsageDescription: Temazo necesita reproducir audio en segundo plano.
+        NSUserTrackingUsageDescription: No usado, declarado por compliance.
+        CFBundleLocalizations:
+          - es
+          - en
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: es.temazo.app
+        PRODUCT_NAME: Temazo
+        TARGETED_DEVICE_FAMILY: '1,2'
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: YES

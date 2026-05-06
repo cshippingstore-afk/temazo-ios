@@ -1,0 +1,153 @@
+name: Build iOS (signed → TestFlight)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      upload_testflight:
+        description: 'Upload to TestFlight after build (true/false)'
+        required: false
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      BUNDLE_ID: es.temazo.app
+      SCHEME: Temazo
+      TEAM_ID: ${{ secrets.APP_STORE_TEAM_ID }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Show tools
+        run: |
+          xcodebuild -version
+          swift --version
+          which xcodegen || true
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate placeholder AppIcon (1024x1024)
+        run: |
+          ICON=Temazo/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+          mkdir -p "$(dirname "$ICON")"
+          if [ ! -f "$ICON" ]; then
+            # Pink background con letra T blanca, 1024x1024 (Apple lo exige para distribución)
+            if command -v magick >/dev/null 2>&1; then
+              magick -size 1024x1024 xc:'#FF2E93' -gravity center -pointsize 700 -fill white -annotate +0+0 'T' "$ICON"
+            elif command -v convert >/dev/null 2>&1; then
+              convert -size 1024x1024 xc:'#FF2E93' -gravity center -pointsize 700 -fill white -annotate +0+0 'T' "$ICON"
+            else
+              brew install imagemagick
+              magick -size 1024x1024 xc:'#FF2E93' -gravity center -pointsize 700 -fill white -annotate +0+0 'T' "$ICON"
+            fi
+          fi
+          ls -lh "$ICON"
+
+      - name: Generate silent.m4a (background audio keepalive)
+        run: |
+          OUT=Temazo/Resources/silent.m4a
+          if [ ! -f "$OUT" ]; then
+            ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -c:a aac -b:a 32k "$OUT" -y >/dev/null 2>&1 || true
+            if [ ! -f "$OUT" ]; then
+              brew install ffmpeg
+              ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -c:a aac -b:a 32k "$OUT" -y
+            fi
+          fi
+          ls -lh "$OUT"
+
+      - name: Generate Xcode project (XcodeGen)
+        run: |
+          xcodegen generate
+          ls -la Temazo.xcodeproj
+
+      - name: Save App Store Connect API key
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s' "$APPSTORE_API_KEY_P8" > ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+
+      - name: Set build number from timestamp
+        id: version
+        run: |
+          BN=$(date +%y%m%d%H%M)
+          echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
+          echo "build_number=$BN" >> $GITHUB_OUTPUT
+
+      - name: Archive (signed, automatic)
+        run: |
+          xcodebuild \
+            -project Temazo.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Temazo.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8 \
+            -authenticationKeyID ${APP_STORE_CONNECT_API_KEY_ID} \
+            -authenticationKeyIssuerID ${APP_STORE_CONNECT_API_ISSUER_ID} \
+            DEVELOPMENT_TEAM=$TEAM_ID \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION=$BUILD_NUMBER \
+            archive
+
+      - name: Export IPA
+        run: |
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$PWD/build/Temazo.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$PWD/build/ipa" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8 \
+            -authenticationKeyID ${APP_STORE_CONNECT_API_KEY_ID} \
+            -authenticationKeyIssuerID ${APP_STORE_CONNECT_API_ISSUER_ID}
+          ls -lh build/ipa/
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Temazo-${{ steps.version.outputs.build_number }}
+          path: build/ipa/*.ipa
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload to TestFlight
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.upload_testflight == 'true'
+        run: |
+          IPA=$(ls build/ipa/*.ipa | head -1)
+          echo "Uploading $IPA to TestFlight..."
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            --apiKey "${APP_STORE_CONNECT_API_KEY_ID}" \
+            --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}"
