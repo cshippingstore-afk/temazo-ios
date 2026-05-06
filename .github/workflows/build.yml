@@ -77,8 +77,65 @@ jobs:
           APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
         run: |
           mkdir -p ~/private_keys
-          printf '%s' "$APPSTORE_API_KEY_P8" > ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          # printf preserva newlines del secreto. Aseguramos terminator final.
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
           chmod 600 ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          echo "--- p8 head/tail ---"
+          head -1 ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          tail -1 ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          echo "--- openssl validate ---"
+          openssl ec -in ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8 -noout -check 2>&1 || true
+
+      - name: Smoke-test API key (JWT → /v1/apps)
+        env:
+          KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          # Build header + payload + signature manually for ES256
+          P8=~/private_keys/AuthKey_${KEY_ID}.p8
+          NOW=$(date +%s)
+          EXP=$(( NOW + 600 ))
+          HEADER='{"alg":"ES256","kid":"'$KEY_ID'","typ":"JWT"}'
+          PAYLOAD='{"iss":"'$ISSUER_ID'","iat":'$NOW',"exp":'$EXP',"aud":"appstoreconnect-v1"}'
+          b64() { openssl base64 -e -A | tr '/+' '_-' | tr -d '='; }
+          H=$(printf '%s' "$HEADER" | b64)
+          P=$(printf '%s' "$PAYLOAD" | b64)
+          SIG=$(printf '%s' "$H.$P" | openssl dgst -sha256 -binary -sign "$P8" | openssl asn1parse -inform DER 2>/dev/null | tail -2 | head -1 | awk -F: '{print $4}')
+          # Above asn1parse approach is fragile — better use python (preinstalled on macOS) for proper ECDSA P1363 signature
+          python3 - <<PYEOF
+          import base64, json, time, sys, subprocess, hashlib
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import ec
+          from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+          import urllib.request
+
+          key_id = "$KEY_ID"
+          issuer_id = "$ISSUER_ID"
+          with open("$P8","rb") as f:
+              key = serialization.load_pem_private_key(f.read(), password=None)
+          header = {"alg":"ES256","kid":key_id,"typ":"JWT"}
+          now = int(time.time())
+          payload = {"iss":issuer_id,"iat":now,"exp":now+600,"aud":"appstoreconnect-v1"}
+          def b64(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+          msg = (b64(json.dumps(header,separators=(',',':')).encode()) + "." +
+                 b64(json.dumps(payload,separators=(',',':')).encode())).encode()
+          sig_der = key.sign(msg, ec.ECDSA(hashes.SHA256()))
+          r,s = decode_dss_signature(sig_der)
+          sig = r.to_bytes(32,'big') + s.to_bytes(32,'big')
+          jwt = msg.decode() + "." + b64(sig)
+          req = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/apps?limit=1",
+                                       headers={"Authorization": "Bearer " + jwt})
+          try:
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  print("✓ API key OK, HTTP", r.status)
+                  print(r.read()[:300])
+          except urllib.error.HTTPError as e:
+              print("✗ API key FAILED HTTP", e.code, e.read()[:500].decode("utf-8","replace"))
+              sys.exit(1)
+          except Exception as e:
+              print("✗ Other error:", e)
+              sys.exit(1)
+          PYEOF
 
       - name: Set build number from timestamp
         id: version
