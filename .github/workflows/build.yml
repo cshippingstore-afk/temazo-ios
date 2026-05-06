@@ -12,7 +12,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     env:
       BUNDLE_ID: es.temazo.app
@@ -26,16 +26,18 @@ jobs:
 
       - name: Select Xcode
         run: |
-          # Preferimos la última 16.x disponible en el runner
-          for V in 16.4 16.3 16.2 16.1 16.0; do
+          # Preferir Xcode 26+ (Apple lo exige desde abril 2026 para subir a App Store Connect)
+          for V in 26.4 26.3 26.2 26.1 26.0 16.4 16.3 16.2 16.1 16.0; do
             if [ -d "/Applications/Xcode_${V}.app" ]; then
               sudo xcode-select -switch "/Applications/Xcode_${V}.app/Contents/Developer"
               echo "Selected Xcode ${V}"
+              xcodebuild -version
               exit 0
             fi
           done
           sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer
           echo "Fallback Xcode default"
+          xcodebuild -version
 
       - name: Show tools
         run: |
