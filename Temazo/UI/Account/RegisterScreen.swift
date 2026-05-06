@@ -23,94 +23,145 @@ struct RegisterScreen: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    Text("🎵 Únete a Temazo").font(.system(size: 22, weight: .bold)).foregroundStyle(.white)
-                    Text("Crea tu cuenta para guardar favoritos y playlists")
-                        .font(.system(size: 12)).foregroundStyle(.textLow)
-
-                    field("Email", $email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
-
-                    HStack {
-                        Group {
-                            if showPwd { TextField("Contraseña (mín 8 + 1 número)", text: $password) }
-                            else { SecureField("Contraseña (mín 8 + 1 número)", text: $password) }
-                        }
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .foregroundStyle(.white)
-                        Button { showPwd.toggle() } label: {
-                            Image(systemName: showPwd ? "eye.slash" : "eye").foregroundStyle(.textLow)
-                        }
-                    }
-                    .padding(12).background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface))
-
-                    field("Fecha nacimiento (YYYY-MM-DD)", $birthDate)
-                        .keyboardType(.numbersAndPunctuation)
-                        .onChange(of: birthDate) { _, v in autoFormatBirthDate(v) }
-
-                    HStack(spacing: 8) {
-                        chip(label: "Hombre", value: "M", current: gender) { gender = "M" }
-                        chip(label: "Mujer", value: "F", current: gender) { gender = "F" }
-                        chip(label: "Otro",  value: "O", current: gender) { gender = "O" }
-                    }
-
-                    Picker("País", selection: $country) {
-                        ForEach(countries, id: \.0) { c in
-                            Text("\(c.1) (\(c.0))").tag(c.0)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface))
-                    .tint(.neonCyan)
-
-                    if let e = error { Text(e).font(.system(size: 12)).foregroundStyle(.liveRed) }
-
-                    Button {
-                        Task { await doRegister() }
-                    } label: {
-                        Group {
-                            if auth.isLoading { ProgressView().tint(.white) }
-                            else { Text("Crear cuenta").font(.system(size: 15, weight: .semibold)) }
-                        }
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.neonPink))
-                        .foregroundStyle(.white)
-                    }
-                    .disabled(auth.isLoading)
-                }
-                .padding(16)
-            }
-            .background(Color.bgRoot)
-            .navigationTitle("Crear cuenta")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { onClose() } label: { Image(systemName: "xmark").foregroundStyle(.white) }
-                }
-            }
-            .toolbarBackground(Color.bgRoot, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            ScrollView { content }
+                .background(Color.bgRoot)
+                .navigationTitle("Crear cuenta")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbar }
+                .toolbarBackground(Color.bgRoot, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
         }
     }
 
-    private func field(_ placeholder: String, _ binding: Binding<String>) -> some View {
-        TextField(placeholder, text: binding)
-            .padding(12).foregroundStyle(.white)
+    private var content: some View {
+        VStack(spacing: 14) {
+            header
+            emailField
+            passwordField
+            birthField
+            genderRow
+            countryPicker
+            errorMessage
+            submitButton
+        }
+        .padding(16)
+    }
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button { onClose() } label: { Image(systemName: "xmark").foregroundStyle(.white) }
+        }
+    }
+
+    private var header: some View {
+        VStack(spacing: 4) {
+            Text("🎵 Únete a Temazo")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white)
+            Text("Crea tu cuenta para guardar favoritos y playlists")
+                .font(.system(size: 12))
+                .foregroundStyle(.textLow)
+        }
+    }
+
+    private var emailField: some View {
+        TextField("Email", text: $email)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.emailAddress)
+            .padding(12)
+            .foregroundStyle(.white)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface))
     }
 
-    private func chip(label: String, value: String, current: String, action: @escaping ()->Void) -> some View {
-        Button(action: action) {
-            Text(label).font(.system(size: 13, weight: .medium))
+    private var passwordField: some View {
+        HStack {
+            Group {
+                if showPwd {
+                    TextField("Contraseña (mín 8 + 1 número)", text: $password)
+                } else {
+                    SecureField("Contraseña (mín 8 + 1 número)", text: $password)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .foregroundStyle(.white)
+
+            Button { showPwd.toggle() } label: {
+                Image(systemName: showPwd ? "eye.slash" : "eye")
+                    .foregroundStyle(.textLow)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface))
+    }
+
+    private var birthField: some View {
+        TextField("Fecha nacimiento (YYYY-MM-DD)", text: $birthDate)
+            .keyboardType(.numbersAndPunctuation)
+            .padding(12)
+            .foregroundStyle(.white)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface))
+            .onChange(of: birthDate) { _, v in autoFormatBirthDate(v) }
+    }
+
+    private var genderRow: some View {
+        HStack(spacing: 8) {
+            chip(label: "Hombre", value: "M") { gender = "M" }
+            chip(label: "Mujer",  value: "F") { gender = "F" }
+            chip(label: "Otro",   value: "O") { gender = "O" }
+        }
+    }
+
+    private var countryPicker: some View {
+        Picker("País", selection: $country) {
+            ForEach(countries, id: \.0) { c in
+                Text("\(c.1) (\(c.0))").tag(c.0)
+            }
+        }
+        .pickerStyle(.menu)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface))
+        .tint(.neonCyan)
+    }
+
+    @ViewBuilder
+    private var errorMessage: some View {
+        if let e = error {
+            Text(e).font(.system(size: 12)).foregroundStyle(.liveRed)
+        }
+    }
+
+    private var submitButton: some View {
+        Button {
+            Task { await doRegister() }
+        } label: {
+            Group {
+                if auth.isLoading { ProgressView().tint(.white) }
+                else { Text("Crear cuenta").font(.system(size: 15, weight: .semibold)) }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.neonPink))
+            .foregroundStyle(.white)
+        }
+        .disabled(auth.isLoading)
+    }
+
+    private func chip(label: String, value: String, action: @escaping () -> Void) -> some View {
+        let active = gender == value
+        return Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
                 .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 14).fill(current == value ? Color.neonPink : Color.bgSurfaceHi))
-                .foregroundStyle(current == value ? .white : .textMid)
+                .background(RoundedRectangle(cornerRadius: 14).fill(active ? Color.neonPink : Color.bgSurfaceHi))
+                .foregroundStyle(active ? .white : .textMid)
         }
     }
 
     private func autoFormatBirthDate(_ v: String) {
-        // Inserta '-' automáticamente: YYYY-MM-DD (max 10 chars)
         let raw = v.filter { $0.isNumber }
         var out = ""
         for (i, ch) in raw.enumerated() {
