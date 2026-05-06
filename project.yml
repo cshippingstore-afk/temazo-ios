@@ -37,41 +37,8 @@ targets:
       - path: Temazo/Resources
     dependencies:
       - package: YouTubeKit
-    info:
-      path: Temazo/Info.plist
-      properties:
-        CFBundleDisplayName: Temazo
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleDevelopmentRegion: es
-        UILaunchStoryboardName: ''
-        UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
-        UIBackgroundModes:
-          - audio
-        UIRequiredDeviceCapabilities:
-          - armv7
-        UIRequiresFullScreen: true
-        UIStatusBarStyle: UIStatusBarStyleLightContent
-        UIViewControllerBasedStatusBarAppearance: false
-        UIUserInterfaceStyle: Dark
-        ITSAppUsesNonExemptEncryption: false
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: false
-          NSExceptionDomains:
-            youtube.com:
-              NSIncludesSubdomains: true
-              NSExceptionAllowsInsecureHTTPLoads: false
-            youtube-nocookie.com:
-              NSIncludesSubdomains: true
-              NSExceptionAllowsInsecureHTTPLoads: false
-        NSAppleMusicUsageDescription: Temazo necesita reproducir audio en segundo plano.
-        NSUserTrackingUsageDescription: No usado, declarado por compliance.
-        CFBundleLocalizations:
-          - es
-          - en
+    # Info.plist se mantiene manual en Temazo/Info.plist (no autogenerado por XcodeGen)
+    # — así garantizamos que UIBackgroundModes audio está siempre presente.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: es.temazo.app
@@ -80,6 +47,8 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_EMIT_LOC_STRINGS: YES
+        INFOPLIST_FILE: Temazo/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
       configs:
         Release:
           CODE_SIGN_STYLE: Manual

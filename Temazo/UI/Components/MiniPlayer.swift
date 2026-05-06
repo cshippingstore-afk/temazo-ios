@@ -34,8 +34,15 @@ struct MiniPlayer: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(t.title).font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white).lineLimit(1)
-                        Text(t.artistName ?? "").font(.system(size: 11))
-                            .foregroundStyle(.textLow).lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(t.artistName ?? "").font(.system(size: 11))
+                                .foregroundStyle(.textLow).lineLimit(1)
+                            if player.state.loadingState != .playing {
+                                Text("· \(player.state.loadingState.rawValue)")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(player.state.loadingState == .failed ? .liveRed : .neonCyan)
+                            }
+                        }
                     }
                     .onTapGesture { onExpand() }
 
