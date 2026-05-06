@@ -110,6 +110,19 @@ jobs:
           # Exportar PATH para steps siguientes
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
+      - name: Install Distribution provisioning profile
+        env:
+          DIST_PROFILE_BASE64: ${{ secrets.DIST_PROFILE_BASE64 }}
+          DIST_PROFILE_UUID: ${{ secrets.DIST_PROFILE_UUID }}
+        run: |
+          PROFILE_DIR=~/Library/MobileDevice/Provisioning\ Profiles
+          mkdir -p "$PROFILE_DIR"
+          PROFILE_PATH="$PROFILE_DIR/${DIST_PROFILE_UUID}.mobileprovision"
+          echo "$DIST_PROFILE_BASE64" | base64 -d > "$PROFILE_PATH"
+          ls -la "$PROFILE_DIR"
+          # Imprime metadata para verificar
+          security cms -D -i "$PROFILE_PATH" 2>/dev/null | grep -E "<key>(Name|UUID|TeamIdentifier|ApplicationIdentifierPrefix)" -A1 || true
+
       - name: Save App Store Connect API key
         env:
           APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
@@ -182,7 +195,10 @@ jobs:
           echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
           echo "build_number=$BN" >> $GITHUB_OUTPUT
 
-      - name: Archive (signed, automatic)
+      - name: Archive (signed, manual)
+        env:
+          DIST_PROFILE_NAME: ${{ secrets.DIST_PROFILE_NAME }}
+          DIST_PROFILE_UUID: ${{ secrets.DIST_PROFILE_UUID }}
         run: |
           xcodebuild \
             -project Temazo.xcodeproj \
@@ -191,13 +207,13 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/Temazo.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8 \
-            -authenticationKeyID ${APP_STORE_CONNECT_API_KEY_ID} \
-            -authenticationKeyIssuerID ${APP_STORE_CONNECT_API_ISSUER_ID} \
             DEVELOPMENT_TEAM=$TEAM_ID \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$DIST_PROFILE_NAME" \
+            PROVISIONING_PROFILE="$DIST_PROFILE_UUID" \
             CURRENT_PROJECT_VERSION=$BUILD_NUMBER \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             archive
 
       - name: Export IPA
@@ -209,22 +225,24 @@ jobs:
           <dict>
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>${TEAM_ID}</string>
-            <key>signingStyle</key><string>automatic</string>
+            <key>signingStyle</key><string>manual</string>
             <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${{ secrets.DIST_PROFILE_NAME }}</string>
+            </dict>
             <key>uploadSymbols</key><true/>
             <key>destination</key><string>export</string>
             <key>stripSwiftSymbols</key><true/>
           </dict>
           </plist>
           EOF
+          cat ExportOptions.plist
           xcodebuild -exportArchive \
             -archivePath "$PWD/build/Temazo.xcarchive" \
             -exportOptionsPlist ExportOptions.plist \
-            -exportPath "$PWD/build/ipa" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8 \
-            -authenticationKeyID ${APP_STORE_CONNECT_API_KEY_ID} \
-            -authenticationKeyIssuerID ${APP_STORE_CONNECT_API_ISSUER_ID}
+            -exportPath "$PWD/build/ipa"
           ls -lh build/ipa/
 
       - name: Upload IPA artifact
