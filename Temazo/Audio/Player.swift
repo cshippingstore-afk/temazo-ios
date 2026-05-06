@@ -27,10 +27,11 @@ final class Player: NSObject, ObservableObject {
         state.queue = queue
         state.index = index
         state.currentTrack = track
-        ensureWebView()
+        // Orden importante: 1) session activa, 2) silent loop arrancado, 3) webview play
+        AudioSessionManager.shared.ensureActive()
         AudioSessionManager.shared.startSilentLoop()
+        ensureWebView()
         loadAndPlay(track)
-        // History sync best-effort
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
@@ -40,6 +41,7 @@ final class Player: NSObject, ObservableObject {
 
     func resume() {
         guard let _ = webView else { return }
+        AudioSessionManager.shared.ensureActive()
         evalJS("if(typeof tmzPlay==='function') tmzPlay();")
         state.isPlaying = true
     }

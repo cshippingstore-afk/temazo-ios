@@ -2,19 +2,20 @@ import Foundation
 import AVFoundation
 
 /// Configura AVAudioSession para reproducción en background.
-/// Apple iOS sólo permite reproducción en background si:
-///  1. UIBackgroundModes incluye "audio" (en Info.plist) ✓
-///  2. AVAudioSession está en categoría .playback ACTIVA
-///  3. La app está produciendo audio activamente al pasar a background
 ///
-/// El reto con WKWebView: el audio del iframe YouTube técnicamente lo produce
-/// la web; iOS a veces no detecta que es nuestra app generando audio. Para asegurar
-/// background playback aplicamos un truco análogo al silent.wav del Android:
-/// reproducimos un loop de audio silencioso con AVAudioPlayer mientras el usuario
-/// quiere música, así iOS reconoce nuestra app como generadora de audio.
+/// Reglas clave para que WKWebView siga sonando con pantalla apagada / app minimizada:
+///
+///  1. Info.plist: UIBackgroundModes incluye "audio" ✓ (project.yml)
+///  2. AVAudioSession categoria .playback **SIN** .mixWithOthers
+///     (mixWithOthers le dice a iOS "soy secundario" → te suspende en background)
+///  3. setActive(true) antes de cada play
+///  4. Silent keep-alive con AVPlayer (no AVAudioPlayer) — corre en proceso separado
+///     que sobrevive en background, mantiene el audio session "ocupado" mientras
+///     WKWebView genera el sonido real del YouTube iframe.
 final class AudioSessionManager {
     static let shared = AudioSessionManager()
-    private var silentPlayer: AVAudioPlayer?
+    private var silentPlayer: AVPlayer?
+    private var silentLooper: NSObjectProtocol?
     private(set) var configured = false
 
     private init() {}
@@ -22,12 +23,18 @@ final class AudioSessionManager {
     func configure() {
         guard !configured else { return }
         configured = true
+
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback,
-                                    mode: .default,
-                                    options: [.mixWithOthers, .allowAirPlay])
-            try session.setActive(true)
+            // .playback = audio primario (como Spotify/Apple Music). NO uses mixWithOthers.
+            // .allowAirPlay y .allowBluetoothA2DP permiten salida a coche/auriculares BT.
+            try session.setCategory(
+                .playback,
+                mode: .default,
+                options: [.allowAirPlay, .allowBluetoothA2DP]
+            )
+            try session.setActive(true, options: [])
+            print("[AudioSession] configured: category=\(session.category) options=\(session.categoryOptions.rawValue)")
         } catch {
             print("[AudioSession] configure error: \(error)")
         }
@@ -45,33 +52,62 @@ final class AudioSessionManager {
             object: nil)
     }
 
-    // MARK: - Silent keepalive (truco background)
+    /// Reactiva la session. Llamar JUSTO antes de cada play para asegurar que iOS
+    /// vuelve a registrar la app como productora de audio.
+    func ensureActive() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true, options: [])
+        } catch {
+            print("[AudioSession] ensureActive error: \(error)")
+        }
+    }
+
+    // MARK: - Silent keepalive (truco para background con WKWebView)
 
     func startSilentLoop() {
         guard silentPlayer == nil else { return }
         guard let url = Bundle.main.url(forResource: "silent", withExtension: "m4a")
-                ?? Bundle.main.url(forResource: "silent", withExtension: "wav") else {
-            print("[AudioSession] silent.m4a not found in bundle")
+                ?? Bundle.main.url(forResource: "silent", withExtension: "wav")
+                ?? Bundle.main.url(forResource: "silent", withExtension: "caf") else {
+            print("[AudioSession] silent audio asset NOT FOUND in bundle — background may stop")
             return
         }
-        do {
-            let p = try AVAudioPlayer(contentsOf: url)
-            p.numberOfLoops = -1
-            p.volume = 0.001
-            p.prepareToPlay()
-            p.play()
-            silentPlayer = p
-        } catch {
-            print("[AudioSession] silent loop error: \(error)")
+
+        // AVPlayer (no AVAudioPlayer): corre en proceso separado, sobrevive background mejor
+        let item = AVPlayerItem(url: url)
+        let player = AVPlayer(playerItem: item)
+        player.volume = 0.001                 // casi inaudible pero >0 (iOS requiere audio real)
+        player.actionAtItemEnd = .none        // no detener al final, el observer lo loopea
+        player.allowsExternalPlayback = false
+        player.preventsDisplaySleepDuringVideoPlayback = false
+
+        // Loop manual — cuando termina el item, rebobinar y seguir
+        silentLooper = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak player] _ in
+            player?.seek(to: .zero)
+            player?.play()
         }
+
+        ensureActive()
+        player.play()
+        silentPlayer = player
+        print("[AudioSession] silent loop STARTED")
     }
 
     func stopSilentLoop() {
-        silentPlayer?.stop()
+        if let obs = silentLooper {
+            NotificationCenter.default.removeObserver(obs)
+            silentLooper = nil
+        }
+        silentPlayer?.pause()
         silentPlayer = nil
+        print("[AudioSession] silent loop STOPPED")
     }
 
-    // MARK: - Notifs
+    // MARK: - Interruption / route handlers
 
     @objc private func handleInterruption(_ note: Notification) {
         guard let info = note.userInfo,
@@ -84,6 +120,7 @@ final class AudioSessionManager {
             if let optsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
                 if opts.contains(.shouldResume) {
+                    ensureActive()
                     Task { @MainActor in Player.shared.resume() }
                 }
             }
@@ -92,11 +129,11 @@ final class AudioSessionManager {
     }
 
     @objc private func handleRouteChange(_ note: Notification) {
-        // Si se desconectan auriculares, pausa (estándar iOS)
         guard let info = note.userInfo,
               let reasonRaw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw) else { return }
         if reason == .oldDeviceUnavailable {
+            // Auriculares desconectados → pausa (estándar iOS)
             Task { @MainActor in Player.shared.pause() }
         }
     }

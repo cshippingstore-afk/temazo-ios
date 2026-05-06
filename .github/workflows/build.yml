@@ -52,18 +52,21 @@ jobs:
           fi
           xcodegen --version
 
-      - name: Generate placeholder AppIcon (1024x1024)
+      - name: Generate AppIcon 1024 (compose Android foreground over dark bg)
         run: |
           ICON=Temazo/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+          FG=Temazo/Resources/ic_launcher_foreground.png
           mkdir -p "$(dirname "$ICON")"
-          if [ ! -f "$ICON" ]; then
-            # Pink solid 1024x1024 — Apple solo exige tamaño + sin transparencia
-            command -v magick >/dev/null 2>&1 || brew install imagemagick
-            if command -v magick >/dev/null 2>&1; then
-              magick -size 1024x1024 xc:'#FF2E93' "$ICON"
-            else
-              convert -size 1024x1024 xc:'#FF2E93' "$ICON"
-            fi
+          command -v magick >/dev/null 2>&1 || brew install imagemagick
+          MAGICK=$(command -v magick || command -v convert)
+          if [ -f "$FG" ]; then
+            # Compone el foreground PNG (logo Temazo) sobre fondo #0A0B16, escalado a 1024x1024
+            $MAGICK -size 1024x1024 xc:'#0A0B16' \
+              \( "$FG" -resize 720x720 \) -gravity center -composite \
+              -alpha off "$ICON"
+          else
+            # Fallback: solid pink
+            $MAGICK -size 1024x1024 xc:'#FF2E93' "$ICON"
           fi
           ls -lh "$ICON"
 

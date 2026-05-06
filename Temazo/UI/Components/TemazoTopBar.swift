@@ -5,13 +5,11 @@ struct TemazoTopBar: View {
 
     var body: some View {
         HStack {
-            // Wordmark "TEMAZO" gradient
-            Text("TEMAZO")
-                .font(.system(size: 26, weight: .heavy, design: .rounded))
-                .foregroundStyle(
-                    LinearGradient(colors: [.neonPink, .neonPurple, .neonCyan],
-                                   startPoint: .leading, endPoint: .trailing)
-                )
+            // Wordmark "TEMAZO" — imagen real (mismo PNG que Android)
+            Image("logo_temazo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(height: 36)
             Spacer()
             EqualizerBars(isActive: isPlaying)
         }
@@ -20,7 +18,6 @@ struct TemazoTopBar: View {
 
 private struct EqualizerBars: View {
     let isActive: Bool
-    @State private var phase: Double = 0
     private let bars = 5
 
     var body: some View {
