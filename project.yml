@@ -21,6 +21,11 @@ settings:
     Release:
       SWIFT_OPTIMIZATION_LEVEL: '-O'
 
+packages:
+  YouTubeKit:
+    url: https://github.com/alexeichhorn/YouTubeKit
+    from: 0.2.0
+
 targets:
   Temazo:
     type: application
@@ -30,6 +35,8 @@ targets:
       - path: Temazo
     resources:
       - path: Temazo/Resources
+    dependencies:
+      - package: YouTubeKit
     info:
       path: Temazo/Info.plist
       properties:

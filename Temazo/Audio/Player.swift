@@ -1,37 +1,35 @@
 import Foundation
-import WebKit
+import AVFoundation
 import Combine
 import UIKit
+import YouTubeKit
 
-/// Player singleton. Equivalente al Player.kt del Android.
-/// Usa un WKWebView que carga https://temazo.es/_app_player.html (YT iframe API).
-/// La comunicación va por:
-///   - app → web: `evaluateJavaScript("tmzLoad(...)")`
-///   - web → app: `WKScriptMessageHandler` con nombre "AndroidBridge"
-///                (el HTML del servidor llama window.AndroidBridge.onReady() etc.)
-///   En iOS expondremos un objeto `AndroidBridge` polyfill que reenvía a `webkit.messageHandlers`.
+/// Player nativo basado en AVPlayer.
+/// Usa YouTubeKit para extraer el stream URL del video YouTube → AVPlayer lo reproduce.
+/// Background audio funciona NATIVAMENTE (sin tricks de WebView), igual que Spotify/Apple Music.
 @MainActor
 final class Player: NSObject, ObservableObject {
     static let shared = Player()
 
     @Published var state = PlayerState()
 
-    private let playerURL = URL(string: "https://temazo.es/_app_player.html")!
-    private var webView: WKWebView?
+    private var avPlayer: AVPlayer?
+    private var statusObs: NSKeyValueObservation?
+    private var timeObs: Any?
+    private var endObs: NSObjectProtocol?
     private var crossfadeMs: Int = 250
-    private var pollTimer: Timer?
+    private var loadingTaskID: UUID?
 
-    // MARK: - Public API (mismo contrato que Player.kt)
+    // MARK: - Public API
 
     func playTrack(_ track: Track, queue: [Track], index: Int) {
         state.queue = queue
         state.index = index
         state.currentTrack = track
-        // Orden importante: 1) session activa, 2) silent loop arrancado, 3) webview play
+        state.positionSec = 0
+        state.durationSec = 0
         AudioSessionManager.shared.ensureActive()
-        AudioSessionManager.shared.startSilentLoop()
-        ensureWebView()
-        loadAndPlay(track)
+        Task { await loadAndPlay(track) }
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
@@ -40,15 +38,13 @@ final class Player: NSObject, ObservableObject {
     }
 
     func resume() {
-        guard let _ = webView else { return }
         AudioSessionManager.shared.ensureActive()
-        evalJS("if(typeof tmzPlay==='function') tmzPlay();")
+        avPlayer?.play()
         state.isPlaying = true
     }
 
     func pause() {
-        guard let _ = webView else { return }
-        evalJS("if(typeof tmzPause==='function') tmzPause();")
+        avPlayer?.pause()
         state.isPlaying = false
     }
 
@@ -58,7 +54,7 @@ final class Player: NSObject, ObservableObject {
         let t = state.queue[nextIdx]
         state.index = nextIdx
         state.currentTrack = t
-        loadAndPlay(t)
+        Task { await loadAndPlay(t) }
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
@@ -68,223 +64,120 @@ final class Player: NSObject, ObservableObject {
         let t = state.queue[prevIdx]
         state.index = prevIdx
         state.currentTrack = t
-        loadAndPlay(t)
+        Task { await loadAndPlay(t) }
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
     func seekTo(seconds: Float) {
-        evalJS("if(typeof tmzSeek==='function') tmzSeek(\(seconds));")
+        guard let p = avPlayer else { return }
+        let cm = CMTime(seconds: Double(seconds), preferredTimescale: 600)
+        p.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
         state.positionSec = seconds
     }
 
     func stopAll() {
-        evalJS("if(typeof tmzStop==='function') tmzStop();")
+        teardownObservers()
+        avPlayer?.pause()
+        avPlayer?.replaceCurrentItem(with: nil)
+        avPlayer = nil
         state = PlayerState()
-        stopPolling()
-        AudioSessionManager.shared.stopSilentLoop()
     }
 
     func setCrossfadeMs(_ ms: Int) {
         crossfadeMs = max(150, min(6000, ms))
     }
 
-    // MARK: - WebView lifecycle
+    // MARK: - Carga via YouTubeKit + AVPlayer
 
-    func ensureWebView() {
-        guard webView == nil else { return }
-
-        let cfg = WKWebViewConfiguration()
-        cfg.allowsInlineMediaPlayback = true
-        cfg.mediaTypesRequiringUserActionForPlayback = []
-        cfg.allowsPictureInPictureMediaPlayback = true
-        cfg.suppressesIncrementalRendering = false
-        // Mantener proceso WebContent vivo (no suspender)
-        if #available(iOS 17.0, *) {
-            cfg.preferences.isElementFullscreenEnabled = true
-        }
-
-        // Inyectar polyfill: el HTML llama window.AndroidBridge.onReady() etc.
-        // Lo redirigimos al messageHandler nativo "TemazoBridge".
-        let polyfill = """
-        (function(){
-          if (window.AndroidBridge) return;
-          window.AndroidBridge = {
-            onReady: function(){ try{ webkit.messageHandlers.TemazoBridge.postMessage({event:'onReady'}); }catch(e){} },
-            onState: function(s){ try{ webkit.messageHandlers.TemazoBridge.postMessage({event:'onState', state:s}); }catch(e){} },
-            onError: function(c){ try{ webkit.messageHandlers.TemazoBridge.postMessage({event:'onError', code:c}); }catch(e){} }
-          };
-        })();
-        """
-        let userScript = WKUserScript(source: polyfill,
-                                      injectionTime: .atDocumentStart,
-                                      forMainFrameOnly: false)
-        cfg.userContentController.addUserScript(userScript)
-        cfg.userContentController.add(BridgeProxy(parent: self), name: "TemazoBridge")
-
-        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 8, height: 8), configuration: cfg)
-        // CRITICAL para background audio: NO hidden, alpha minimal pero >0
-        // (iOS suspende el WebContent process si la WebView está marcada hidden)
-        wv.isHidden = false
-        wv.alpha = 0.01
-        wv.isUserInteractionEnabled = false
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) TemazoApp/1.0 Mobile"
-        wv.allowsBackForwardNavigationGestures = false
-        wv.scrollView.isScrollEnabled = false
-        wv.navigationDelegate = self
-        webView = wv
-
-        // Adjuntar a una ventana visible (8×8 px) para que iOS no lo suspenda.
-        attachToWindow()
-
-        // Re-adjuntar al volver a foreground (por si keyWindow cambió)
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAppActive),
-            name: UIApplication.didBecomeActiveNotification,
-            object: nil
-        )
-
-        // Pre-warm: cargar la página vacía antes del primer track.
-        wv.load(URLRequest(url: playerURL))
-    }
-
-    @objc private func handleAppActive() {
-        attachToWindow()
-        // Re-activar audio session por si iOS la perdió
-        AudioSessionManager.shared.ensureActive()
-    }
-
-    private func attachToWindow() {
-        guard let wv = webView else { return }
-        DispatchQueue.main.async {
-            if let win = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .flatMap({ $0.windows })
-                .first(where: { $0.isKeyWindow }) {
-                if wv.superview != win {
-                    wv.removeFromSuperview()
-                    wv.translatesAutoresizingMaskIntoConstraints = true
-                    // 8x8 visible en esquina top-left, pero alpha 0.01 → invisible al usuario
-                    wv.frame = CGRect(x: 0, y: 0, width: 8, height: 8)
-                    win.addSubview(wv)
-                    // bringSubviewToFront: el WebView en TOP del z-order para asegurar que su layer renderiza
-                    win.bringSubviewToFront(wv)
-                }
-            }
-        }
-    }
-
-    private func loadAndPlay(_ track: Track) {
+    private func loadAndPlay(_ track: Track) async {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
-            print("[Player] track has no youtubeId, skip")
-            next()
+            print("[Player] no youtubeId, skip")
+            await MainActor.run { self.next() }
             return
         }
-        ensureWebView()
-        startPolling()
-        // Si la página ya está cargada Y el JS está ready → loadVideoById sin recargar.
-        // Si no, cargamos URL con ?v= para que la página cargue el video al inicializarse.
-        if state.ready, let _ = webView {
-            evalJS("""
-                if(typeof fadeOutAndDo==='function'){
-                    fadeOutAndDo(function(){
-                        if(typeof player!=='undefined' && player.loadVideoById) player.loadVideoById('\(ytId)');
-                        setTimeout(function(){ if(typeof ensurePlayingAndUnmuted==='function') ensurePlayingAndUnmuted(); }, 500);
-                    }, \(crossfadeMs));
-                } else if(typeof player!=='undefined' && player.loadVideoById){
-                    player.loadVideoById('\(ytId)');
+
+        let myTask = UUID()
+        loadingTaskID = myTask
+        state.ready = false
+
+        // Extraer stream URL del YouTube ID
+        do {
+            let yt = YouTube(videoID: ytId)
+            let streams = try await yt.streams
+            // Preferir audio-only (mejor calidad/peso) → si no hay, mp4 con audio
+            let chosen: YouTubeKit.Stream? =
+                streams.filter { $0.includesAudioTrack && !$0.includesVideoTrack }
+                       .filterAudioOnly()
+                       .highestAudioBitrateStream()
+                ?? streams.filter { $0.includesAudioTrack }
+                          .lowestVideoQualityStream()
+                ?? streams.first
+            guard let stream = chosen else {
+                print("[Player] no stream available for \(ytId)")
+                await MainActor.run { self.next() }
+                return
+            }
+            // Si esta task ya no es la actual (track cambió), abandonamos
+            guard loadingTaskID == myTask else { return }
+            await MainActor.run { self.startAVPlayback(streamURL: stream.url) }
+        } catch {
+            print("[Player] YouTubeKit error for \(ytId): \(error)")
+            await MainActor.run { self.next() }
+        }
+    }
+
+    private func startAVPlayback(streamURL: URL) {
+        teardownObservers()
+        let item = AVPlayerItem(url: streamURL)
+        let p = AVPlayer(playerItem: item)
+        p.automaticallyWaitsToMinimizeStalling = true
+        p.allowsExternalPlayback = false
+        avPlayer = p
+
+        // Observa duración cuando el item esté ready
+        statusObs = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if item.status == .readyToPlay {
+                    let d = item.asset.duration
+                    if d.isValid && !d.isIndefinite {
+                        self.state.durationSec = Float(CMTimeGetSeconds(d))
+                    }
+                    self.state.ready = true
                 }
-            """)
-        } else {
-            let cacheBust = Int(Date().timeIntervalSince1970 / 60)
-            var comps = URLComponents(url: playerURL, resolvingAgainstBaseURL: false)!
-            comps.queryItems = [
-                URLQueryItem(name: "v", value: ytId),
-                URLQueryItem(name: "t", value: String(cacheBust)),
-            ]
-            if let url = comps.url {
-                webView?.load(URLRequest(url: url))
             }
         }
+
+        // Polling de posición cada 0.5s
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
+        timeObs = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] cm in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.state.positionSec = Float(CMTimeGetSeconds(cm))
+                if self.state.durationSec == 0,
+                   let d = self.avPlayer?.currentItem?.duration,
+                   d.isValid && !d.isIndefinite {
+                    self.state.durationSec = Float(CMTimeGetSeconds(d))
+                }
+            }
+        }
+
+        // Auto-next al terminar
+        endObs = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.next() }
+        }
+
+        AudioSessionManager.shared.ensureActive()
+        p.play()
         state.isPlaying = true
     }
 
-    // MARK: - Polling 500ms
-
-    private func startPolling() {
-        stopPolling()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.evalJS("(function(){ try{ return JSON.stringify({p: tmzGetTime(), d: tmzGetDuration()}); }catch(e){ return null; } })();") { result in
-                guard let json = result as? String, let data = json.data(using: .utf8) else { return }
-                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Double],
-                   let p = obj["p"], let d = obj["d"] {
-                    DispatchQueue.main.async {
-                        self.state.positionSec = Float(p)
-                        self.state.durationSec = Float(d)
-                    }
-                }
-            }
-        }
-    }
-
-    private func stopPolling() {
-        pollTimer?.invalidate()
-        pollTimer = nil
-    }
-
-    // MARK: - JS eval
-
-    private func evalJS(_ js: String, completion: ((Any?) -> Void)? = nil) {
-        webView?.evaluateJavaScript(js) { result, _ in
-            completion?(result)
-        }
-    }
-
-    // MARK: - Bridge events (called from BridgeProxy on main thread)
-
-    fileprivate func handleBridge(_ payload: [String: Any]) {
-        guard let event = payload["event"] as? String else { return }
-        switch event {
-        case "onReady":
-            state.ready = true
-        case "onState":
-            // YT states: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
-            let s = (payload["state"] as? Int) ?? -1
-            switch s {
-            case 0: next()                    // ended → siguiente
-            case 1: state.isPlaying = true    // playing
-            // Ignoramos pause de Chromium (igual que Android)
-            default: break
-            }
-        case "onError":
-            print("[Player] YT error code=\(payload["code"] ?? "?")")
-        default: break
-        }
-    }
-}
-
-extension Player: WKNavigationDelegate {
-    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { @MainActor in
-            // Una vez la página HTML está cargada, el polyfill garantiza AndroidBridge.
-            // El JS de la página llama AndroidBridge.onReady() cuando el YT iframe está listo.
-        }
-    }
-}
-
-private final class BridgeProxy: NSObject, WKScriptMessageHandler {
-    weak var parent: Player?
-    init(parent: Player) { self.parent = parent }
-
-    nonisolated func userContentController(_ userContentController: WKUserContentController,
-                                           didReceive message: WKScriptMessage) {
-        // El handler corre off-main; reenviamos al main actor.
-        let body = message.body
-        Task { @MainActor in
-            if let dict = body as? [String: Any] {
-                self.parent?.handleBridge(dict)
-            }
-        }
+    private func teardownObservers() {
+        statusObs?.invalidate(); statusObs = nil
+        if let obs = timeObs { avPlayer?.removeTimeObserver(obs); timeObs = nil }
+        if let obs = endObs { NotificationCenter.default.removeObserver(obs); endObs = nil }
     }
 }
