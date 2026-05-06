@@ -217,6 +217,22 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             archive
 
+      - name: Verify Info.plist has UIBackgroundModes audio
+        run: |
+          APP_PATH=$(find build/Temazo.xcarchive/Products/Applications -name "*.app" | head -1)
+          PLIST="$APP_PATH/Info.plist"
+          echo "--- Info.plist en .app archivada ---"
+          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$PLIST" || echo "MISSING UIBackgroundModes!"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          # Falla el build si UIBackgroundModes audio no está
+          MODES=$(/usr/libexec/PlistBuddy -c "Print :UIBackgroundModes:0" "$PLIST" 2>/dev/null || echo "")
+          if [ "$MODES" != "audio" ]; then
+            echo "❌ UIBackgroundModes audio NO está en el Info.plist del binario"
+            exit 1
+          fi
+          echo "✓ UIBackgroundModes audio confirmado"
+
       - name: Export IPA
         run: |
           cat > ExportOptions.plist <<EOF
