@@ -82,6 +82,34 @@ jobs:
           xcodegen generate
           ls -la Temazo.xcodeproj
 
+      - name: Import Distribution certificate (.p12) to keychain
+        env:
+          DIST_P12_BASE64: ${{ secrets.DIST_P12_BASE64 }}
+          DIST_P12_PASSWORD: ${{ secrets.DIST_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Crear keychain temporal sólo para este build
+          KEYCHAIN_PATH=$RUNNER_TEMP/temazo-build.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Decodificar y importar el .p12
+          P12_PATH=$RUNNER_TEMP/temazo_dist.p12
+          echo "$DIST_P12_BASE64" | base64 -d > "$P12_PATH"
+          security import "$P12_PATH" -P "$DIST_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Añadir el keychain a la lista de búsqueda
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          # Verificar
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          # Exportar PATH para steps siguientes
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+
       - name: Save App Store Connect API key
         env:
           APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
@@ -182,8 +210,10 @@ jobs:
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>${TEAM_ID}</string>
             <key>signingStyle</key><string>automatic</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
             <key>uploadSymbols</key><true/>
             <key>destination</key><string>export</string>
+            <key>stripSwiftSymbols</key><true/>
           </dict>
           </plist>
           EOF
@@ -216,3 +246,10 @@ jobs:
             -t ios \
             --apiKey "${APP_STORE_CONNECT_API_KEY_ID}" \
             --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}"
+
+      - name: Cleanup temporary keychain
+        if: always()
+        run: |
+          if [ -n "$KEYCHAIN_PATH" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
