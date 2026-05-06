@@ -21,11 +21,6 @@ settings:
     Release:
       SWIFT_OPTIMIZATION_LEVEL: '-O'
 
-packages:
-  YouTubeKit:
-    url: https://github.com/alexeichhorn/YouTubeKit
-    branch: main
-
 targets:
   Temazo:
     type: application
@@ -35,8 +30,6 @@ targets:
       - path: Temazo
     resources:
       - path: Temazo/Resources
-    dependencies:
-      - package: YouTubeKit
     # Info.plist se mantiene manual en Temazo/Info.plist (no autogenerado por XcodeGen)
     # — así garantizamos que UIBackgroundModes audio está siempre presente.
     settings:

@@ -3,12 +3,20 @@ import AVFoundation
 import Combine
 import UIKit
 import MediaPlayer
-import YouTubeKit
 
+/// Player nativo basado en AVPlayer.
+/// La URL del stream YouTube se obtiene del proxy de temazo.es:
+///   https://temazo.es/api/yt_proxy.php?id=<youtube_id>
+/// El backend usa yt-dlp para resolver y reenviar bytes (bypaseando IP-binding de YouTube).
+///
+/// Resultado: AVPlayer reproduce un stream desde temazo.es → background audio funciona
+/// nativamente, igual que Spotify/Apple Music.
 @MainActor
 final class Player: NSObject, ObservableObject {
     static let shared = Player()
     @Published var state = PlayerState()
+
+    private static let proxyBase = "https://temazo.es/api/yt_proxy.php"
 
     private var avPlayer: AVPlayer?
     private var statusObs: NSKeyValueObservation?
@@ -17,7 +25,6 @@ final class Player: NSObject, ObservableObject {
     private var endObs: NSObjectProtocol?
     private var stallObs: NSObjectProtocol?
     private var crossfadeMs: Int = 250
-    private var loadingTaskID: UUID?
 
     override init() {
         super.init()
@@ -30,16 +37,14 @@ final class Player: NSObject, ObservableObject {
         state.currentTrack = track
         state.positionSec = 0
         state.durationSec = 0
-        state.loadingState = .extracting
         state.lastError = nil
+        state.loadingState = .extracting
         AudioSessionManager.shared.ensureActive()
-        Task { await loadAndPlay(track) }
+        startAVPlayback(for: track)
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
-    func togglePlay() {
-        if state.isPlaying { pause() } else { resume() }
-    }
+    func togglePlay() { if state.isPlaying { pause() } else { resume() } }
 
     func resume() {
         AudioSessionManager.shared.ensureActive()
@@ -48,7 +53,7 @@ final class Player: NSObject, ObservableObject {
     }
 
     func pause() {
-        print("[Player] pause() called from \(Thread.callStackSymbols.prefix(4).joined(separator: " | "))")
+        print("[Player] pause() called")
         avPlayer?.pause()
         state.isPlaying = false
     }
@@ -60,7 +65,7 @@ final class Player: NSObject, ObservableObject {
         state.index = nextIdx
         state.currentTrack = t
         state.loadingState = .extracting
-        Task { await loadAndPlay(t) }
+        startAVPlayback(for: t)
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
@@ -71,7 +76,7 @@ final class Player: NSObject, ObservableObject {
         state.index = prevIdx
         state.currentTrack = t
         state.loadingState = .extracting
-        Task { await loadAndPlay(t) }
+        startAVPlayback(for: t)
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
@@ -90,79 +95,51 @@ final class Player: NSObject, ObservableObject {
         state = PlayerState()
     }
 
-    func setCrossfadeMs(_ ms: Int) {
-        crossfadeMs = max(150, min(6000, ms))
-    }
+    func setCrossfadeMs(_ ms: Int) { crossfadeMs = max(150, min(6000, ms)) }
 
-    // MARK: - Carga via YouTubeKit + AVPlayer
+    // MARK: - AVPlayer streaming desde el proxy backend
 
-    private func loadAndPlay(_ track: Track) async {
+    private func startAVPlayback(for track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
             state.lastError = "no youtubeId"; state.loadingState = .failed
-            print("[Player] no youtubeId, skip"); next(); return
+            print("[Player] no youtubeId for track id=\(track.id)"); return
         }
-        let myTask = UUID()
-        loadingTaskID = myTask
-        print("[Player] extracting URL for ytId=\(ytId)")
-
-        do {
-            let yt = YouTube(videoID: ytId)
-            let streams = try await yt.streams
-            print("[Player] YouTubeKit returned \(streams.count) streams")
-
-            let chosen: YouTubeKit.Stream? =
-                streams.filterAudioOnly().highestAudioBitrateStream()
-                ?? streams.filter { $0.includesAudioTrack }.lowestResolutionStream()
-                ?? streams.filter { $0.includesAudioTrack }.first
-                ?? streams.first
-
-            guard let stream = chosen else {
-                state.lastError = "no playable stream"; state.loadingState = .failed
-                print("[Player] no playable stream for \(ytId)"); next(); return
-            }
-            guard loadingTaskID == myTask else { return }
-            print("[Player] chosen stream: itag=\(stream.itag) audioOnly=\(!stream.includesVideoTrack) url=\(stream.url.absoluteString.prefix(120))…")
-            await MainActor.run { self.startAVPlayback(streamURL: stream.url, trackTitle: track.title) }
-        } catch {
-            let typeName = String(describing: type(of: error))
-            state.lastError = "\(typeName): \(error.localizedDescription)"
-            state.loadingState = .failed
-            print("[Player] YouTubeKit error type=\(typeName): \(error)")
+        guard let proxyURL = buildProxyURL(ytId: ytId) else {
+            state.lastError = "invalid proxy URL"; state.loadingState = .failed
+            return
         }
-    }
-
-    private func startAVPlayback(streamURL: URL, trackTitle: String) {
         teardownObservers()
-        let item = AVPlayerItem(url: streamURL)
+
+        print("[Player] streaming from \(proxyURL.absoluteString)")
+        let item = AVPlayerItem(url: proxyURL)
         let p = AVPlayer(playerItem: item)
-        p.automaticallyWaitsToMinimizeStalling = true   // permitir buffering correcto en background
+        p.automaticallyWaitsToMinimizeStalling = true
         p.allowsExternalPlayback = false
         p.actionAtItemEnd = .none
         avPlayer = p
 
-        // Log audio session state
-        let session = AVAudioSession.sharedInstance()
-        print("[Player] AudioSession.category=\(session.category) active=\(session.isOtherAudioPlaying) outputVolume=\(session.outputVolume)")
+        // Log estado de la audio session
+        let s = AVAudioSession.sharedInstance()
+        print("[Player] AudioSession.category=\(s.category) mode=\(s.mode)")
 
         statusObs = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 switch item.status {
                 case .readyToPlay:
-                    let d = item.asset.duration
-                    if d.isValid && !d.isIndefinite {
+                    if let d = item.asset.duration as CMTime?,
+                       d.isValid && !d.isIndefinite {
                         self.state.durationSec = Float(CMTimeGetSeconds(d))
                     }
                     self.state.ready = true
                     self.state.loadingState = .ready
-                    print("[Player] item readyToPlay duration=\(self.state.durationSec)s")
+                    print("[Player] readyToPlay duration=\(self.state.durationSec)s")
                 case .failed:
                     let err = item.error?.localizedDescription ?? "unknown"
-                    self.state.lastError = "AVPlayer: \(err)"
+                    self.state.lastError = err
                     self.state.loadingState = .failed
                     print("[Player] item FAILED: \(err)")
-                case .unknown:
-                    print("[Player] item unknown")
+                case .unknown: break
                 @unknown default: break
                 }
             }
@@ -192,15 +169,13 @@ final class Player: NSObject, ObservableObject {
         }
 
         endObs = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item, queue: .main
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.next() }
         }
 
         stallObs = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemPlaybackStalled,
-            object: item, queue: .main
+            forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.state.loadingState = .stalled
@@ -211,7 +186,12 @@ final class Player: NSObject, ObservableObject {
         AudioSessionManager.shared.ensureActive()
         p.play()
         state.isPlaying = true
-        print("[Player] AVPlayer.play() invoked")
+    }
+
+    private func buildProxyURL(ytId: String) -> URL? {
+        var comps = URLComponents(string: Self.proxyBase)
+        comps?.queryItems = [URLQueryItem(name: "id", value: ytId)]
+        return comps?.url
     }
 
     private func teardownObservers() {
