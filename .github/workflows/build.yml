@@ -25,7 +25,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer || sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer
+        run: |
+          # Preferimos la última 16.x disponible en el runner
+          for V in 16.4 16.3 16.2 16.1 16.0; do
+            if [ -d "/Applications/Xcode_${V}.app" ]; then
+              sudo xcode-select -switch "/Applications/Xcode_${V}.app/Contents/Developer"
+              echo "Selected Xcode ${V}"
+              exit 0
+            fi
+          done
+          sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer
+          echo "Fallback Xcode default"
 
       - name: Show tools
         run: |
