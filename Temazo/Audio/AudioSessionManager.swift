@@ -79,12 +79,12 @@ final class AudioSessionManager {
               let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
         switch type {
         case .began:
-            Player.shared.pause()
+            Task { @MainActor in Player.shared.pause() }
         case .ended:
             if let optsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
                 if opts.contains(.shouldResume) {
-                    Player.shared.resume()
+                    Task { @MainActor in Player.shared.resume() }
                 }
             }
         @unknown default: break
@@ -97,7 +97,7 @@ final class AudioSessionManager {
               let reasonRaw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw) else { return }
         if reason == .oldDeviceUnavailable {
-            Player.shared.pause()
+            Task { @MainActor in Player.shared.pause() }
         }
     }
 }

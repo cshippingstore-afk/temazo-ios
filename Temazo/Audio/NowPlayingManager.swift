@@ -5,6 +5,7 @@ import UIKit
 
 /// Gestiona MPNowPlayingInfoCenter (lock screen / control center) +
 /// MPRemoteCommandCenter (botones play/pause/skip de auriculares, BT, lock screen).
+@MainActor
 final class NowPlayingManager {
     static let shared = NowPlayingManager()
     private var cancellables: Set<AnyCancellable> = []
@@ -16,6 +17,7 @@ final class NowPlayingManager {
 
     func bind(to player: Player) {
         player.$state
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 self?.update(with: state)
             }
@@ -28,36 +30,35 @@ final class NowPlayingManager {
         let cc = MPRemoteCommandCenter.shared()
 
         cc.playCommand.addTarget { _ in
-            Player.shared.resume()
+            Task { @MainActor in Player.shared.resume() }
             return .success
         }
         cc.pauseCommand.addTarget { _ in
-            Player.shared.pause()
+            Task { @MainActor in Player.shared.pause() }
             return .success
         }
         cc.togglePlayPauseCommand.addTarget { _ in
-            Player.shared.togglePlay()
+            Task { @MainActor in Player.shared.togglePlay() }
             return .success
         }
         cc.nextTrackCommand.addTarget { _ in
-            Player.shared.next()
+            Task { @MainActor in Player.shared.next() }
             return .success
         }
         cc.previousTrackCommand.addTarget { _ in
-            Player.shared.prev()
+            Task { @MainActor in Player.shared.prev() }
             return .success
         }
         cc.changePlaybackPositionCommand.addTarget { event in
             guard let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            Player.shared.seekTo(seconds: Float(e.positionTime))
+            Task { @MainActor in Player.shared.seekTo(seconds: Float(e.positionTime)) }
             return .success
         }
         cc.stopCommand.addTarget { _ in
-            Player.shared.stopAll()
+            Task { @MainActor in Player.shared.stopAll() }
             return .success
         }
 
-        // Activar comandos
         cc.playCommand.isEnabled = true
         cc.pauseCommand.isEnabled = true
         cc.togglePlayPauseCommand.isEnabled = true
@@ -91,12 +92,14 @@ final class NowPlayingManager {
             } else {
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = info
                 fetchArtwork(urlStr: urlStr) { [weak self] art in
-                    guard let self else { return }
-                    if let art {
-                        self.artworkCache[urlStr] = art
-                        var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-                        current[MPMediaItemPropertyArtwork] = art
-                        MPNowPlayingInfoCenter.default().nowPlayingInfo = current
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if let art {
+                            self.artworkCache[urlStr] = art
+                            var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                            current[MPMediaItemPropertyArtwork] = art
+                            MPNowPlayingInfoCenter.default().nowPlayingInfo = current
+                        }
                     }
                 }
             }
@@ -105,14 +108,14 @@ final class NowPlayingManager {
         }
     }
 
-    private func fetchArtwork(urlStr: String, completion: @escaping (MPMediaItemArtwork?) -> Void) {
+    nonisolated private func fetchArtwork(urlStr: String, completion: @escaping (MPMediaItemArtwork?) -> Void) {
         guard let url = URL(string: urlStr) else { completion(nil); return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data = data, let img = UIImage(data: data) else {
-                DispatchQueue.main.async { completion(nil) }; return
+                completion(nil); return
             }
             let art = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
-            DispatchQueue.main.async { completion(art) }
+            completion(art)
         }.resume()
     }
 }
