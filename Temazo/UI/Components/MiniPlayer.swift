@@ -43,6 +43,11 @@ struct MiniPlayer: View {
                                     .foregroundStyle(player.state.loadingState == .failed ? .liveRed : .neonCyan)
                             }
                         }
+                        if player.state.loadingState == .failed,
+                           let err = player.state.lastError {
+                            Text(err).font(.system(size: 9))
+                                .foregroundStyle(.liveRed).lineLimit(2)
+                        }
                     }
                     .onTapGesture { onExpand() }
 

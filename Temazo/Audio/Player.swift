@@ -124,10 +124,10 @@ final class Player: NSObject, ObservableObject {
             print("[Player] chosen stream: itag=\(stream.itag) audioOnly=\(!stream.includesVideoTrack) url=\(stream.url.absoluteString.prefix(120))…")
             await MainActor.run { self.startAVPlayback(streamURL: stream.url, trackTitle: track.title) }
         } catch {
-            state.lastError = "extract: \(error.localizedDescription)"
+            let typeName = String(describing: type(of: error))
+            state.lastError = "\(typeName): \(error.localizedDescription)"
             state.loadingState = .failed
-            print("[Player] YouTubeKit error: \(error)")
-            // No avanzamos automáticamente — para que el usuario vea el error en pantalla
+            print("[Player] YouTubeKit error type=\(typeName): \(error)")
         }
     }
 

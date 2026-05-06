@@ -24,7 +24,7 @@ settings:
 packages:
   YouTubeKit:
     url: https://github.com/alexeichhorn/YouTubeKit
-    from: 0.2.0
+    branch: main
 
 targets:
   Temazo:
