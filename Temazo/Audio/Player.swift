@@ -105,12 +105,11 @@ final class Player: NSObject, ObservableObject {
             let yt = YouTube(videoID: ytId)
             let streams = try await yt.streams
             // Preferir audio-only (mejor calidad/peso) → si no hay, mp4 con audio
+            // Preferir audio-only highest bitrate; si no, mp4 con audio (cualquier resolución baja)
             let chosen: YouTubeKit.Stream? =
-                streams.filter { $0.includesAudioTrack && !$0.includesVideoTrack }
-                       .filterAudioOnly()
-                       .highestAudioBitrateStream()
-                ?? streams.filter { $0.includesAudioTrack }
-                          .lowestVideoQualityStream()
+                streams.filterAudioOnly().highestAudioBitrateStream()
+                ?? streams.filter { $0.includesAudioTrack }.lowestResolutionStream()
+                ?? streams.filter { $0.includesAudioTrack }.first
                 ?? streams.first
             guard let stream = chosen else {
                 print("[Player] no stream available for \(ytId)")
