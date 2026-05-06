@@ -82,9 +82,9 @@ struct SearchScreen: View {
                 if !Task.isCancelled {
                     let valid = resp.tracks.filter { $0.youtubeId != nil && !($0.youtubeId ?? "").isEmpty }
                     tracks = valid
-                    // Pre-resolve top 10 → tap play instant
-                    let ids = valid.prefix(10).compactMap { $0.youtubeId }
-                    TemazoAPI.shared.prefetchYouTubeURLs(Array(ids))
+                    // Pre-resolve TODOS para que cualquier tap sea instantáneo
+                    let ids = valid.compactMap { $0.youtubeId }
+                    TemazoAPI.shared.prefetchYouTubeURLs(ids)
                 }
             } catch {
                 if !Task.isCancelled { tracks = [] }
