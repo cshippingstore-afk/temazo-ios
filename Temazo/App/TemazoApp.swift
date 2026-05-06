@@ -19,7 +19,6 @@ struct TemazoApp: App {
                 .environmentObject(settings)
                 .preferredColorScheme(.dark)
                 .task {
-                    AudioSessionManager.shared.configure()
                     NowPlayingManager.shared.bind(to: player)
                     await auth.refreshSession()
                 }
@@ -30,6 +29,13 @@ struct TemazoApp: App {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Configurar AVAudioSession ANTES de cualquier UI / cualquier reproducción
+        // (importante: si esto se hace en .task de SwiftUI, hay race con play)
+        AudioSessionManager.shared.configure()
+
+        // Recibir remote control events (lock screen / BT)
+        application.beginReceivingRemoteControlEvents()
+
         // Crash logger
         NSSetUncaughtExceptionHandler { exception in
             let trace = exception.callStackSymbols.joined(separator: "\n")

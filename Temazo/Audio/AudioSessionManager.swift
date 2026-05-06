@@ -56,10 +56,13 @@ final class AudioSessionManager {
         guard let info = note.userInfo,
               let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+        print("[AudioSession] interruption type=\(type.rawValue) info=\(info)")
         switch type {
         case .began:
+            print("[AudioSession] interruption BEGAN — pausing player")
             Task { @MainActor in Player.shared.pause() }
         case .ended:
+            print("[AudioSession] interruption ENDED")
             if let optsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
                 if opts.contains(.shouldResume) {

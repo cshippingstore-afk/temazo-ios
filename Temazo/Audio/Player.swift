@@ -48,6 +48,7 @@ final class Player: NSObject, ObservableObject {
     }
 
     func pause() {
+        print("[Player] pause() called from \(Thread.callStackSymbols.prefix(4).joined(separator: " | "))")
         avPlayer?.pause()
         state.isPlaying = false
     }
@@ -134,10 +135,14 @@ final class Player: NSObject, ObservableObject {
         teardownObservers()
         let item = AVPlayerItem(url: streamURL)
         let p = AVPlayer(playerItem: item)
-        p.automaticallyWaitsToMinimizeStalling = false  // arranca ya, sin esperar buffer infinito
+        p.automaticallyWaitsToMinimizeStalling = true   // permitir buffering correcto en background
         p.allowsExternalPlayback = false
         p.actionAtItemEnd = .none
         avPlayer = p
+
+        // Log audio session state
+        let session = AVAudioSession.sharedInstance()
+        print("[Player] AudioSession.category=\(session.category) active=\(session.isOtherAudioPlaying) outputVolume=\(session.outputVolume)")
 
         statusObs = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
