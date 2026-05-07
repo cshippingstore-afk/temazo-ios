@@ -164,6 +164,7 @@ final class Player: NSObject, ObservableObject {
         AudioSessionManager.shared.ensureActive()
         queuePlayer?.play()
         state.isPlaying = true
+        state.loadingState = .playing  // ya empezamos, ocultar texto de estado
         print("[Player] startAVPlayer track=\(track.id) url=\(url.absoluteString.prefix(100))…")
     }
 

@@ -11,7 +11,7 @@ struct MainScreen: View {
 
     var body: some View {
         ZStack {
-            Color.bgRoot.ignoresSafeArea()
+            AnimatedNeonBackground()
 
             VStack(spacing: 0) {
                 Group {
@@ -64,7 +64,8 @@ private struct BottomTabBar: View {
                 }
             }
         }
-        .background(Color.bgSurface)
+        .background(.ultraThinMaterial)
+        .background(Color.bgRoot.opacity(0.7))
         .overlay(Rectangle().frame(height: 0.5).foregroundStyle(Color.borderSoft), alignment: .top)
     }
 }

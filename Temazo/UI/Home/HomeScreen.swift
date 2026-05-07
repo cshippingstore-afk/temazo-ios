@@ -67,7 +67,6 @@ struct HomeScreen: View {
                 Spacer(minLength: 30)
             }
         }
-        .background(Color.bgRoot)
         .task { await vm.loadTrending(vm.selectedGenre) }
         .refreshable { await vm.forceRefresh() }
     }

@@ -62,7 +62,6 @@ struct SearchScreen: View {
                 }
             }
         }
-        .background(Color.bgRoot)
         .onAppear { focused = true }
     }
 

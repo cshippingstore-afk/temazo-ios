@@ -17,7 +17,6 @@ struct AccountScreen: View {
                 LoginPanel(onRegister: { showRegister = true })
             }
         }
-        .background(Color.bgRoot)
         .fullScreenCover(isPresented: $showRegister) {
             RegisterScreen { showRegister = false }
         }

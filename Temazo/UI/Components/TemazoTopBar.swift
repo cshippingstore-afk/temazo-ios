@@ -4,15 +4,21 @@ struct TemazoTopBar: View {
     let isPlaying: Bool
 
     var body: some View {
-        HStack {
-            // Wordmark "TEMAZO" — imagen real (mismo PNG que Android)
+        ZStack {
+            // Logo centrado, más grande
             Image("logo_temazo")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(height: 36)
-            Spacer()
-            EqualizerBars(isActive: isPlaying)
+                .frame(height: 56)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack {
+                Spacer()
+                EqualizerBars(isActive: isPlaying)
+                    .padding(.trailing, 4)
+            }
         }
+        .frame(height: 56)
     }
 }
 
@@ -30,10 +36,10 @@ private struct EqualizerBars: View {
                         : 0.4
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(isActive ? Color.neonPink : Color.textLow)
-                        .frame(width: 3, height: 18 * h)
+                        .frame(width: 3, height: 22 * h)
                 }
             }
-            .frame(height: 22)
+            .frame(height: 26)
         }
     }
 }
