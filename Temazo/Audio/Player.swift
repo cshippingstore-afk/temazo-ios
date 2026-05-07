@@ -119,9 +119,33 @@ final class Player: NSObject, ObservableObject {
     // MARK: - Playback
 
     private func startPlayback(track: Track) {
-        guard let url = proxyURL(for: track) else {
+        guard let ytId = track.youtubeId, !ytId.isEmpty else {
+            state.lastError = "no youtubeId"; state.loadingState = .failed; return
+        }
+        Task { await self.resolveAndPlay(track: track, ytId: ytId) }
+    }
+
+    private func resolveAndPlay(track: Track, ytId: String) async {
+        // 1. Intento extracción directa con WKWebView (URL → YouTube CDN, IP del iPhone, RÁPIDO)
+        var streamURL: URL?
+        do {
+            let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 5)
+            streamURL = url
+            print("[Player] DIRECT URL ok for \(ytId)")
+        } catch {
+            print("[Player] direct extract failed (\(error.localizedDescription)) → fallback proxy")
+        }
+        // 2. Fallback: proxy backend (siempre funciona pero más lento)
+        if streamURL == nil {
+            streamURL = proxyURL(for: track)
+        }
+        guard let url = streamURL else {
             state.lastError = "no url"; state.loadingState = .failed; return
         }
+        startAVPlayer(track: track, url: url)
+    }
+
+    private func startAVPlayer(track: Track, url: URL) {
         teardownObservers()
         let item = makePlayerItem(url: url)
         attachItemObservers(item)
@@ -131,17 +155,16 @@ final class Player: NSObject, ObservableObject {
             qp.insert(item, after: nil)
         } else {
             let qp = AVQueuePlayer(items: [item])
-            qp.automaticallyWaitsToMinimizeStalling = false  // arranca rapido
+            qp.automaticallyWaitsToMinimizeStalling = false
             qp.allowsExternalPlayback = false
-            qp.actionAtItemEnd = .advance  // pasa al siguiente automaticamente
+            qp.actionAtItemEnd = .advance
             queuePlayer = qp
             attachPlayerObservers(qp)
         }
-
         AudioSessionManager.shared.ensureActive()
         queuePlayer?.play()
         state.isPlaying = true
-        print("[Player] startPlayback track=\(track.id) url=\(url.absoluteString.prefix(80))…")
+        print("[Player] startAVPlayer track=\(track.id) url=\(url.absoluteString.prefix(100))…")
     }
 
     private func makePlayerItem(url: URL) -> AVPlayerItem {
