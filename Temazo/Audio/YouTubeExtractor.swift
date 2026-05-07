@@ -16,6 +16,20 @@ final class YouTubeExtractor: NSObject {
     private var currentContinuation: CheckedContinuation<URL, Error>?
     private var currentVideoID: String?
 
+    // Cache de URLs extraídas (sesión-life). YouTube CDN URLs duran 4-6h
+    private struct CacheEntry { let url: URL; let timestamp: Date }
+    private var cache: [String: CacheEntry] = [:]
+    private let cacheTTL: TimeInterval = 4 * 3600  // 4h
+
+    func cachedURL(for videoID: String) -> URL? {
+        guard let entry = cache[videoID] else { return nil }
+        if Date().timeIntervalSince(entry.timestamp) > cacheTTL {
+            cache[videoID] = nil
+            return nil
+        }
+        return entry.url
+    }
+
     enum ExtractorError: LocalizedError {
         case timeout, noURL, badResponse, signatureCipher
         var errorDescription: String? {
@@ -31,9 +45,13 @@ final class YouTubeExtractor: NSObject {
     /// Extrae la URL del stream de audio para un videoID, con la IP del iPhone.
     /// Timeout 8s. Si falla, lanza error y el caller debe usar fallback.
     func extractStreamURL(videoID: String, timeoutSec: TimeInterval = 8) async throws -> URL {
+        // Cache hit → instant
+        if let cached = cachedURL(for: videoID) {
+            print("[YTExtractor] cache hit for \(videoID)")
+            return cached
+        }
         // Si ya hay extracción en curso para mismo video, espera
         if currentVideoID == videoID, let cont = currentContinuation {
-            // No reentrante: timeout y reintenta
             cont.resume(throwing: ExtractorError.timeout)
             currentContinuation = nil
         }
@@ -78,13 +96,18 @@ final class YouTubeExtractor: NSObject {
         wv.isHidden = true
         webView = wv
 
-        // Carga la pagina watch de YouTube — bpctr=9999999999 evita prompts age-restricted
-        let url = URL(string: "https://www.youtube.com/watch?v=\(videoID)&bpctr=9999999999&has_verified=1")!
+        // Carga embed page (mucho más ligera que watch). El JS de YouTube se ejecuta igual
+        // y ytInitialPlayerResponse aparece poblado.
+        let url = URL(string: "https://www.youtube.com/embed/\(videoID)?bpctr=9999999999&has_verified=1")!
         wv.load(URLRequest(url: url))
     }
 
     fileprivate func handleResult(_ result: [String: Any]) {
         if let urlStr = result["url"] as? String, let url = URL(string: urlStr) {
+            // Cachear para próximos plays
+            if let vid = currentVideoID {
+                cache[vid] = CacheEntry(url: url, timestamp: Date())
+            }
             currentContinuation?.resume(returning: url)
         } else if let err = result["error"] as? String {
             switch err {
