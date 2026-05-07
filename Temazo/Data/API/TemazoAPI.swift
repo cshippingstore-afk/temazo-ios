@@ -98,24 +98,12 @@ final class TemazoAPI {
         return try await send(req, SearchResponse.self)
     }
 
-    /// Combina /api/auth.php?a=csrf (CSRF token) + ?a=me (user actual) en una sola call.
-    /// El backend renombró `session` a `csrf+me` por separado.
+    /// /api/auth.php?a=csrf devuelve TODO: csrf + user (null si no logged) + countries + turnstile_site_key.
     func session() async throws -> SessionResponse {
-        // CSRF primero (no requiere auth, siempre OK)
-        async let csrfRespRaw: CSRFResp = send(request("api/auth.php", query: ["a": "csrf"]), CSRFResp.self)
-        // Me en paralelo (devuelve user si hay sesion, error si no)
-        async let meRespRaw: MeResp = send(request("api/auth.php", query: ["a": "me"]), MeResp.self)
-
-        var csrf: String? = nil
-        var user: SessionUser? = nil
-        if let c = try? await csrfRespRaw {
-            csrf = c.csrf
-            if let token = c.csrf { csrfToken = token }
-        }
-        if let m = try? await meRespRaw {
-            user = m.user
-        }
-        return SessionResponse(user: user, csrf: csrf)
+        let req = request("api/auth.php", query: ["a": "csrf"])
+        let resp: CSRFResp = try await send(req, CSRFResp.self)
+        if let c = resp.csrf { csrfToken = c }
+        return SessionResponse(user: resp.user, csrf: resp.csrf)
     }
 
     func login(email: String, password: String) async throws -> LoginResponse {
@@ -219,6 +207,7 @@ struct SessionResponse: Decodable {
 
 struct CSRFResp: Decodable {
     let csrf: String?
+    let user: SessionUser?
     let ok: Bool?
 }
 

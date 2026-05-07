@@ -71,9 +71,11 @@ final class HomeViewModel: ObservableObject {
             cache[genre] = valid
             lastUpdateMin = resp.lastUpdateMin
             error = nil
-            // Pre-resolve TODAS las URLs en backend → tap play instantáneo en cualquier track
-            let allIds = valid.compactMap { $0.youtubeId }
-            TemazoAPI.shared.prefetchYouTubeURLs(allIds)
+            // Pre-resolve URLs (extractor del iPhone, IP del iPhone) para los primeros 20
+            let topIds = valid.prefix(20).compactMap { $0.youtubeId }
+            YouTubeExtractor.shared.prefetch(videoIDs: topIds)
+            // Backend cache (fallback) para más
+            TemazoAPI.shared.prefetchYouTubeURLs(valid.compactMap { $0.youtubeId })
         } catch {
             self.error = error.localizedDescription
         }
