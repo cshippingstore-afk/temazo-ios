@@ -25,6 +25,7 @@ final class AuthRepository: ObservableObject {
             let resp = try await TemazoAPI.shared.login(email: email, password: password)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
+                TemazoAPI.shared.persistCookies()  // mantener login entre lanzamientos
                 return .success(())
             }
             return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Login error"))
@@ -43,6 +44,7 @@ final class AuthRepository: ObservableObject {
                 gender: gender, countryCode: countryCode)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
+                TemazoAPI.shared.persistCookies()
                 return .success(())
             }
             return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Register error"))
@@ -54,6 +56,7 @@ final class AuthRepository: ObservableObject {
     func logout() async {
         _ = try? await TemazoAPI.shared.logout()
         clearCookies()
+        TemazoAPI.shared.clearPersistedCookies()
         currentUser = nil
     }
 

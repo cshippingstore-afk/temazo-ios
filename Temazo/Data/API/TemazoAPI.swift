@@ -23,6 +23,66 @@ final class TemazoAPI {
         cfg.urlCache = nil
         session = URLSession(configuration: cfg)
         decoder = JSONDecoder()
+        // Restaura cookies guardadas de sesión anterior (mantener login)
+        restoreCookies()
+    }
+
+    // MARK: - Persistencia cookies (mantener login entre lanzamientos)
+
+    private static let cookieDefaultsKey = "temazo_session_cookies"
+
+    /// Guarda las cookies actuales de temazo.es en UserDefaults (con expiración 1 año).
+    /// Llamar tras login exitoso.
+    func persistCookies() {
+        guard let cookies = HTTPCookieStorage.shared.cookies(for: baseURL) else { return }
+        let serializable: [[HTTPCookiePropertyKey: Any]] = cookies.compactMap { c in
+            guard var props = c.properties else { return nil }
+            // Forzar expiración a +1 año si no la tiene
+            if props[.expires] == nil {
+                props[.expires] = Date().addingTimeInterval(365 * 24 * 3600)
+            }
+            return props
+        }
+        // Convertir keys a strings para UserDefaults
+        let toSave = serializable.map { dict -> [String: Any] in
+            var out: [String: Any] = [:]
+            for (k, v) in dict {
+                if let date = v as? Date {
+                    out[k.rawValue] = date.timeIntervalSince1970
+                } else {
+                    out[k.rawValue] = v
+                }
+            }
+            return out
+        }
+        UserDefaults.standard.set(toSave, forKey: Self.cookieDefaultsKey)
+        print("[Auth] persisted \(toSave.count) cookies")
+    }
+
+    private func restoreCookies() {
+        guard let saved = UserDefaults.standard.array(forKey: Self.cookieDefaultsKey) as? [[String: Any]] else { return }
+        var restored = 0
+        for dict in saved {
+            var props: [HTTPCookiePropertyKey: Any] = [:]
+            for (k, v) in dict {
+                if k == HTTPCookiePropertyKey.expires.rawValue, let ts = v as? TimeInterval {
+                    props[.expires] = Date(timeIntervalSince1970: ts)
+                } else {
+                    props[HTTPCookiePropertyKey(k)] = v
+                }
+            }
+            // Si la expiración guardada ya pasó, descarta
+            if let exp = props[.expires] as? Date, exp < Date() { continue }
+            if let cookie = HTTPCookie(properties: props) {
+                HTTPCookieStorage.shared.setCookie(cookie)
+                restored += 1
+            }
+        }
+        if restored > 0 { print("[Auth] restored \(restored) cookies from previous session") }
+    }
+
+    func clearPersistedCookies() {
+        UserDefaults.standard.removeObject(forKey: Self.cookieDefaultsKey)
     }
 
     // MARK: - Helpers
