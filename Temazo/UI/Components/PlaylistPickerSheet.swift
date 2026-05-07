@@ -35,10 +35,24 @@ struct PlaylistPickerSheet: View {
     @ViewBuilder
     private var content: some View {
         if auth.currentUser == nil {
-            VStack(spacing: 8) {
-                Image(systemName: "lock.fill").font(.system(size: 40)).foregroundStyle(.textLow)
-                Text("Inicia sesión para ver tus playlists")
+            VStack(spacing: 14) {
+                Image(systemName: "music.note.list").font(.system(size: 44)).foregroundStyle(.textLow)
+                Text("Para ver tus playlists")
                     .font(.system(size: 14)).foregroundStyle(.textMid)
+                Button {
+                    onClose()
+                    NotificationCenter.default.post(name: .temazoSwitchToAccountTab, object: nil)
+                } label: {
+                    Text("INICIA SESIÓN")
+                        .font(.system(size: 15, weight: .bold))
+                        .tracking(1.0)
+                        .foregroundStyle(.neonPink)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(
+                            Capsule().stroke(Color.neonPink.opacity(0.6), lineWidth: 1)
+                        )
+                        .shadow(color: .neonPink.opacity(0.3), radius: 8)
+                }
             }
         } else if loading && playlists.isEmpty {
             ProgressView().tint(.neonPink)

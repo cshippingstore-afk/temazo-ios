@@ -4,6 +4,10 @@ enum AppTab: Int, Hashable {
     case home, search, account
 }
 
+extension Notification.Name {
+    static let temazoSwitchToAccountTab = Notification.Name("temazoSwitchToAccountTab")
+}
+
 struct MainScreen: View {
     @State private var tab: AppTab = .home
     @State private var fullPlayerShown: Bool = false
@@ -39,6 +43,9 @@ struct MainScreen: View {
         }
         .animation(.easeInOut(duration: 0.25), value: player.state.currentTrack != nil)
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: fullPlayerShown)
+        .onReceive(NotificationCenter.default.publisher(for: .temazoSwitchToAccountTab)) { _ in
+            tab = .account
+        }
     }
 }
 
