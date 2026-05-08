@@ -88,11 +88,10 @@ final class HomeViewModel: ObservableObject {
             cache[genre] = valid
             lastUpdateMin = resp.lastUpdateMin
             error = nil
-            // Pre-resolve URLs (extractor del iPhone, IP del iPhone) para los primeros 20
-            let topIds = valid.prefix(20).compactMap { $0.youtubeId }
-            YouTubeExtractor.shared.prefetch(videoIDs: topIds)
-            // Backend cache (fallback) para más
-            TemazoAPI.shared.prefetchYouTubeURLs(valid.compactMap { $0.youtubeId })
+            // Pre-resolve YouTube backend cache para los primeros 20 (con iframe oficial
+            // el iframe los carga vía CDN de YouTube directamente, esto solo "calienta"
+            // el cache de yt_proxy.php en el VPS por si en el futuro se reactiva)
+            TemazoAPI.shared.prefetchYouTubeURLs(valid.prefix(20).compactMap { $0.youtubeId })
         } catch {
             self.error = error.localizedDescription
         }

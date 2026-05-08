@@ -20,7 +20,9 @@ struct TemazoApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     NowPlayingManager.shared.bind(to: player)
-                    YouTubeExtractor.shared.warmUp()  // pre-carga la WKWebView para extracciones rápidas
+                    // Pre-carga del WKWebView del motor iframe para que la primera reproducción
+                    // sea instantánea (sin esperar 1-2s al booteo del iframe)
+                    IframePlayerEngine.shared.ensureLoaded()
                     await auth.refreshSession()
                 }
         }
