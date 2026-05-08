@@ -141,10 +141,23 @@ final class TemazoAPI {
 
     // MARK: - Endpoints
 
-    func trendingByGenre(_ genre: String, limit: Int = 50) async throws -> TrendingResponse {
+    func trendingByGenre(_ genre: String, limit: Int = 50, country: String? = nil) async throws -> TrendingResponse {
         let req = request("api/trending_world.php",
-                          query: ["genre": genre, "limit": String(limit)])
+                          query: ["genre": genre, "limit": String(limit), "country": country])
         return try await send(req, TrendingResponse.self)
+    }
+
+    // MARK: - Artist + Album
+    func artist(id: Int64? = nil, slug: String? = nil, name: String? = nil) async throws -> ArtistResponse {
+        let req = request("api/artist.php",
+                          query: ["id": id.map(String.init), "slug": slug, "name": name])
+        return try await send(req, ArtistResponse.self)
+    }
+
+    func album(id: Int64? = nil, slug: String? = nil) async throws -> AlbumResponse {
+        let req = request("api/album.php",
+                          query: ["id": id.map(String.init), "slug": slug])
+        return try await send(req, AlbumResponse.self)
     }
 
     func artistTracks(id: Int64? = nil, name: String? = nil, exclude: String? = nil, limit: Int = 30) async throws -> ArtistTracksResponse {
@@ -166,22 +179,24 @@ final class TemazoAPI {
         return SessionResponse(user: resp.user, csrf: resp.csrf)
     }
 
-    func login(email: String, password: String) async throws -> LoginResponse {
+    func login(email: String, password: String, remember: Bool = true) async throws -> LoginResponse {
         if csrfToken == nil { _ = try await session() }
         let req = request("api/auth.php", query: ["a": "login"], method: "POST",
-                          form: ["email": email, "password": password])
+                          form: ["email": email, "password": password,
+                                 "remember": remember ? "1" : "0"])
         let resp = try await send(req, LoginResponse.self)
         if let c = resp.csrf { csrfToken = c }
         return resp
     }
 
     func register(email: String, password: String, birthDate: String,
-                  gender: String, countryCode: String) async throws -> LoginResponse {
+                  gender: String, countryCode: String, remember: Bool = true) async throws -> LoginResponse {
         if csrfToken == nil { _ = try await session() }
         let req = request("api/auth.php", query: ["a": "register"], method: "POST",
                           form: ["email": email, "password": password,
                                  "birth_date": birthDate, "gender": gender,
-                                 "country_code": countryCode, "turnstile_token": ""])
+                                 "country_code": countryCode, "turnstile_token": "",
+                                 "remember": remember ? "1" : "0"])
         let resp = try await send(req, LoginResponse.self)
         if let c = resp.csrf { csrfToken = c }
         return resp
@@ -216,15 +231,118 @@ final class TemazoAPI {
     }
 
     @discardableResult
-    func historyAdd(_ trackId: Int64) async throws -> GenericResponse {
+    func historyAdd(_ trackId: Int64, source: String = "app") async throws -> GenericResponse {
         let req = request("api/user_data.php", query: ["a": "history_add"],
-                          method: "POST", form: ["track_id": String(trackId)])
+                          method: "POST", form: ["track_id": String(trackId), "source": source])
         return try await send(req, GenericResponse.self)
     }
 
     func lyrics(_ trackId: Int64) async throws -> LyricsResponse {
         let req = request("api/lyrics_fetch.php", query: ["id": String(trackId)])
         return try await send(req, LyricsResponse.self)
+    }
+
+    // MARK: - Perfil
+
+    func profile() async throws -> ProfileResponse {
+        let req = request("api/user_data.php", query: ["a": "profile"])
+        return try await send(req, ProfileResponse.self)
+    }
+
+    func avatarUpload(imageData: Data, mime: String) async throws -> AvatarUploadResponse {
+        let boundary = "tmz-\(UUID().uuidString)"
+        var comps = URLComponents(url: baseURL.appendingPathComponent("api/user_data.php"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "a", value: "avatar_upload")]
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "POST"
+        req.setValue("temazo-app-2026", forHTTPHeaderField: "X-Temazo-Mobile")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        if let csrf = csrfToken { req.setValue(csrf, forHTTPHeaderField: "X-CSRF-Token") }
+
+        var body = Data()
+        let ext: String = (mime == "image/png") ? "png" : (mime == "image/webp") ? "webp" : (mime == "image/gif") ? "gif" : "jpg"
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"avatar\"; filename=\"avatar.\(ext)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mime)\r\n\r\n".data(using: .utf8)!)
+        body.append(imageData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+        return try await send(req, AvatarUploadResponse.self)
+    }
+
+    @discardableResult
+    func avatarDelete() async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "avatar_delete"], method: "POST")
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func usernameSet(_ username: String) async throws -> UsernameResponse {
+        let req = request("api/user_data.php", query: ["a": "username_set"],
+                          method: "POST", form: ["username": username])
+        return try await send(req, UsernameResponse.self)
+    }
+
+    // MARK: - Playlists CRUD
+
+    @discardableResult
+    func playlistCreate(name: String, description: String = "") async throws -> PlaylistCreateResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_create"],
+                          method: "POST", form: ["name": name, "description": description])
+        return try await send(req, PlaylistCreateResponse.self)
+    }
+
+    @discardableResult
+    func playlistRename(_ playlistId: Int64, name: String, description: String = "") async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_rename"],
+                          method: "POST",
+                          form: ["playlist_id": String(playlistId), "name": name, "description": description])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func playlistDelete(_ playlistId: Int64) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_delete"],
+                          method: "POST", form: ["playlist_id": String(playlistId)])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func playlistAdd(_ playlistId: Int64, trackId: Int64) async throws -> PlaylistAddResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_add"],
+                          method: "POST",
+                          form: ["playlist_id": String(playlistId), "track_id": String(trackId)])
+        return try await send(req, PlaylistAddResponse.self)
+    }
+
+    @discardableResult
+    func playlistRemove(_ playlistId: Int64, trackId: Int64) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_remove"],
+                          method: "POST",
+                          form: ["playlist_id": String(playlistId), "track_id": String(trackId)])
+        return try await send(req, GenericResponse.self)
+    }
+
+    // MARK: - Seguir artistas
+
+    @discardableResult
+    func followToggle(artistId: Int64) async throws -> FollowToggleResponse {
+        let req = request("api/user_data.php", query: ["a": "follow_toggle"],
+                          method: "POST", form: ["artist_id": String(artistId)])
+        return try await send(req, FollowToggleResponse.self)
+    }
+
+    func follows() async throws -> FollowsResponse {
+        let req = request("api/user_data.php", query: ["a": "follows"])
+        return try await send(req, FollowsResponse.self)
+    }
+
+    // MARK: - Historial
+
+    func history(limit: Int = 50) async throws -> HistoryResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "history", "limit": String(limit)])
+        return try await send(req, HistoryResponse.self)
     }
 
     /// Pre-resolve YouTube URLs en backend (cache 4h). Fire-and-forget.

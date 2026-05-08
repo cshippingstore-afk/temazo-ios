@@ -2,11 +2,15 @@ import SwiftUI
 
 struct FullPlayer: View {
     let onClose: () -> Void
+    let onCoverClick: () -> Void
+    let onArtistClick: () -> Void
+    let onAddToPlaylist: () -> Void
+    let onLoadPlaylist: () -> Void
+
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
 
     @State private var showLyrics = false
-    @State private var showPlaylists = false
     @State private var lyrics: [LyricLine] = []
     @State private var seekValue: Double = 0
     @State private var isSeeking = false
@@ -48,9 +52,6 @@ struct FullPlayer: View {
                 }
             }
             .task(id: t.id) { await loadLyrics(trackId: t.id) }
-            .sheet(isPresented: $showPlaylists) {
-                PlaylistPickerSheet(onClose: { showPlaylists = false })
-            }
         )
     }
 
@@ -65,9 +66,9 @@ struct FullPlayer: View {
             Spacer()
             Text("REPRODUCIENDO")
                 .font(.system(size: 10, weight: .bold)).tracking(1.5)
-                .foregroundStyle(.textMid)
+                .foregroundStyle(Color.textMid)
             Spacer()
-            Button { showPlaylists = true } label: {
+            Button { onLoadPlaylist() } label: {
                 Image(systemName: "music.note.list").font(.system(size: 20))
                     .foregroundStyle(.white)
             }
@@ -82,10 +83,15 @@ struct FullPlayer: View {
             .shadow(color: Color.neonPurple.opacity(0.3), radius: 60, y: 20)
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
-                    .stroke(LinearGradient(colors: [.neonPink.opacity(0.6), .neonPurple.opacity(0.3)],
+                    .stroke(LinearGradient(colors: [Color.neonPink.opacity(0.6), Color.neonPurple.opacity(0.3)],
                                            startPoint: .topLeading, endPoint: .bottomTrailing),
                             lineWidth: 1.5)
             )
+            .onTapGesture {
+                if track.albumId != nil || (track.albumSlug?.isEmpty == false) {
+                    onCoverClick()
+                }
+            }
     }
 
     private func titleBlock(track: Track) -> some View {
@@ -94,7 +100,12 @@ struct FullPlayer: View {
                 .foregroundStyle(.white).multilineTextAlignment(.center)
                 .lineLimit(2)
             Text(track.artistName ?? "").font(.system(size: 14))
-                .foregroundStyle(.textMid)
+                .foregroundStyle(Color.textMid)
+                .onTapGesture {
+                    if track.artistId != nil || (track.artistSlug?.isEmpty == false) {
+                        onArtistClick()
+                    }
+                }
         }
         .padding(.horizontal, 18)
     }
@@ -146,10 +157,20 @@ struct FullPlayer: View {
 
     private func bottomActions(isFav: Bool, trackId: Int64) -> some View {
         HStack(spacing: 20) {
-            Button { favorites.toggle(trackId) } label: {
+            Button {
+                FavToggle.toggle(trackId: trackId, favRepo: favorites)
+            } label: {
                 Image(systemName: isFav ? "heart.fill" : "heart")
                     .font(.system(size: 22))
                     .foregroundStyle(isFav ? Color.neonPink : Color.textMid)
+                    .padding(10)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+            }
+
+            Button { onAddToPlaylist() } label: {
+                Image(systemName: "plus.rectangle.on.rectangle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.textMid)
                     .padding(10)
                     .background(Circle().fill(Color.white.opacity(0.08)))
             }
@@ -162,17 +183,7 @@ struct FullPlayer: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Capsule().fill(showLyrics ? Color.neonPink : Color.white.opacity(0.08)))
                 .foregroundStyle(.white)
-                .shadow(color: showLyrics ? .neonPink.opacity(0.5) : .clear, radius: 8)
-            }
-
-            Button { showPlaylists = true } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "music.note.list")
-                    Text("Playlist").font(.system(size: 13, weight: .semibold))
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Capsule().fill(Color.white.opacity(0.08)))
-                .foregroundStyle(.white)
+                .shadow(color: showLyrics ? Color.neonPink.opacity(0.5) : .clear, radius: 8)
             }
         }
     }

@@ -18,11 +18,11 @@ final class AuthRepository: ObservableObject {
         }
     }
 
-    func login(email: String, password: String) async -> Result<Void, AuthError> {
+    func login(email: String, password: String, remember: Bool = true) async -> Result<Void, AuthError> {
         isLoading = true
         defer { isLoading = false }
         do {
-            let resp = try await TemazoAPI.shared.login(email: email, password: password)
+            let resp = try await TemazoAPI.shared.login(email: email, password: password, remember: remember)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
                 TemazoAPI.shared.persistCookies()  // mantener login entre lanzamientos
@@ -35,13 +35,13 @@ final class AuthRepository: ObservableObject {
     }
 
     func register(email: String, password: String, birthDate: String,
-                  gender: String, countryCode: String) async -> Result<Void, AuthError> {
+                  gender: String, countryCode: String, remember: Bool = true) async -> Result<Void, AuthError> {
         isLoading = true
         defer { isLoading = false }
         do {
             let resp = try await TemazoAPI.shared.register(
                 email: email, password: password, birthDate: birthDate,
-                gender: gender, countryCode: countryCode)
+                gender: gender, countryCode: countryCode, remember: remember)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
                 TemazoAPI.shared.persistCookies()

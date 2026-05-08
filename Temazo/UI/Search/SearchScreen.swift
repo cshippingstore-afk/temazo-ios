@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchScreen: View {
+    let onTrackClick: (Track, [Track], Int) -> Void
     @State private var query: String = ""
     @State private var tracks: [Track] = []
     @State private var isLoading: Bool = false
@@ -54,7 +55,7 @@ struct SearchScreen: View {
                                 isPlaying: player.state.isPlaying
                             ) {
                                 focused = false
-                                player.playTrack(t, queue: tracks, index: idx)
+                                onTrackClick(t, tracks, idx)
                             }
                         }
                     }
@@ -93,7 +94,7 @@ struct SearchScreen: View {
 }
 
 #Preview {
-    SearchScreen()
+    SearchScreen(onTrackClick: { _, _, _ in })
         .environmentObject(Player.shared)
         .preferredColorScheme(.dark)
 }

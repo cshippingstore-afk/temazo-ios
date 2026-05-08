@@ -17,6 +17,23 @@ final class HomeViewModel: ObservableObject {
 
     private var cache: [String: [Track]] = [:]
 
+    /// País del usuario para sincronizar el top con el de la web.
+    /// Locale del dispositivo. Si no es hispano (los 21 oficiales) → fallback a ES.
+    private let userCountry: String = {
+        let cc: String = {
+            if #available(iOS 16, *) {
+                return Locale.current.region?.identifier ?? Locale.current.regionCode ?? ""
+            } else {
+                return Locale.current.regionCode ?? ""
+            }
+        }().uppercased()
+        let supported: Set<String> = [
+            "ES","MX","AR","CO","PE","VE","CL","EC","GT","CU","BO","DO",
+            "HN","PY","SV","NI","CR","PA","UY","PR","GQ"
+        ]
+        return supported.contains(cc) ? cc : "ES"
+    }()
+
     let genres: [GenreItem] = [
         .init(id: "reggaeton", name: "Reggaetón", emoji: "🔥"),
         .init(id: "pop", name: "Pop", emoji: "🎤"),
@@ -65,7 +82,7 @@ final class HomeViewModel: ObservableObject {
 
     private func silentRefresh(_ genre: String) async {
         do {
-            let resp = try await TemazoAPI.shared.trendingByGenre(genre, limit: 50)
+            let resp = try await TemazoAPI.shared.trendingByGenre(genre, limit: 50, country: userCountry)
             let valid = resp.tracks.filter { $0.youtubeId != nil && !($0.youtubeId ?? "").isEmpty }
             tracks = valid
             cache[genre] = valid

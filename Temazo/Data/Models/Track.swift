@@ -8,6 +8,8 @@ struct Track: Codable, Identifiable, Hashable {
     let artistSlug: String?
     let artistId: Int64?
     let album: String?
+    let albumId: Int64?
+    let albumSlug: String?
     let cover: String?
     let coverMedium: String?
     let coverLarge: String?
@@ -15,6 +17,7 @@ struct Track: Codable, Identifiable, Hashable {
     let youtubeId: String?
     let duration: String?
     let durationSec: Int?
+    let popularity: Int?
     let position: Int?
     let prevPosition: Int?
     let delta: Int?
@@ -26,12 +29,15 @@ struct Track: Codable, Identifiable, Hashable {
         case artistSlug = "artist_slug"
         case artistId = "artist_id"
         case album, cover
+        case albumId = "album_id"
+        case albumSlug = "album_slug"
         case coverMedium = "cover_medium"
         case coverLarge = "cover_large"
         case artistImageMedium = "artist_image_medium"
         case youtubeId = "youtube_id"
         case duration
         case durationSec = "duration_sec"
+        case popularity
         case position
         case prevPosition = "prev_position"
         case delta
@@ -58,6 +64,12 @@ struct Track: Codable, Identifiable, Hashable {
             artistId = i
         } else { artistId = nil }
         album = try? c.decode(String.self, forKey: .album)
+        if let i = try? c.decode(Int64.self, forKey: .albumId) {
+            albumId = i
+        } else if let s = try? c.decode(String.self, forKey: .albumId), let i = Int64(s) {
+            albumId = i
+        } else { albumId = nil }
+        albumSlug = try? c.decode(String.self, forKey: .albumSlug)
         cover = try? c.decode(String.self, forKey: .cover)
         coverMedium = try? c.decode(String.self, forKey: .coverMedium)
         coverLarge = try? c.decode(String.self, forKey: .coverLarge)
@@ -65,6 +77,7 @@ struct Track: Codable, Identifiable, Hashable {
         youtubeId = try? c.decode(String.self, forKey: .youtubeId)
         duration = try? c.decode(String.self, forKey: .duration)
         durationSec = try? c.decode(Int.self, forKey: .durationSec)
+        popularity = try? c.decode(Int.self, forKey: .popularity)
         position = try? c.decode(Int.self, forKey: .position)
         prevPosition = try? c.decode(Int.self, forKey: .prevPosition)
         delta = try? c.decode(Int.self, forKey: .delta)
@@ -94,11 +107,13 @@ struct Playlist: Codable, Identifiable, Hashable {
     let slug: String?
     let description: String?
     let cover: String?
+    let previewCover: String?
     let trackCount: Int?
     let isLikedDefault: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, slug, description, cover
+        case previewCover = "preview_cover"
         case trackCount = "track_count"
         case isLikedDefault = "is_liked_default"
     }
@@ -114,12 +129,22 @@ struct Playlist: Codable, Identifiable, Hashable {
         slug = try? c.decode(String.self, forKey: .slug)
         description = try? c.decode(String.self, forKey: .description)
         cover = try? c.decode(String.self, forKey: .cover)
+        previewCover = try? c.decode(String.self, forKey: .previewCover)
         trackCount = try? c.decode(Int.self, forKey: .trackCount)
         if let b = try? c.decode(Bool.self, forKey: .isLikedDefault) {
             isLikedDefault = b
         } else if let i = try? c.decode(Int.self, forKey: .isLikedDefault) {
             isLikedDefault = i != 0
         } else { isLikedDefault = nil }
+    }
+
+    /// URL absoluta de la cover (cover propio si existe, si no la del primer track),
+    /// con el host de temazo.es prepended si la ruta era relativa.
+    var displayCover: String? {
+        let raw = cover ?? previewCover
+        guard let r = raw, !r.isEmpty else { return nil }
+        if r.hasPrefix("http") { return r }
+        return "https://temazo.es" + (r.hasPrefix("/") ? r : "/" + r)
     }
 }
 

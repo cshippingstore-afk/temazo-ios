@@ -27,13 +27,21 @@ final class FavoritesRepo: ObservableObject {
     func toggle(_ id: Int64) {
         if ids.contains(id) { ids.remove(id) } else { ids.insert(id) }
         save()
-        // Sync remoto best-effort
-        Task { try? await TemazoAPI.shared.favToggle(id) }
     }
+
+    /// Wrapper con keyword param — para uso desde FavToggle helper.
+    func toggle(trackId: Int64) { toggle(trackId) }
 
     /// Reemplaza el set local con la lista remota (al login).
     func setRemote(_ remote: [Int64]) {
         ids = Set(remote)
+        save()
+    }
+
+    func replaceAll(_ remote: [Int64]) { setRemote(remote) }
+
+    func clear() {
+        ids = []
         save()
     }
 }

@@ -1,16 +1,13 @@
 import SwiftUI
 
 struct HomeScreen: View {
+    let onTrackClick: (Track, [Track], Int) -> Void
     @StateObject private var vm = HomeViewModel()
     @EnvironmentObject var player: Player
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                TemazoTopBar(isPlaying: player.state.isPlaying)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
-
                 LiveIndicator(minutes: vm.lastUpdateMin)
                     .padding(.horizontal, 16)
 
@@ -37,7 +34,7 @@ struct HomeScreen: View {
                                     isCurrent: player.state.currentTrack?.id == t.id,
                                     isPlaying: player.state.isPlaying
                                 ) {
-                                    player.playTrack(t, queue: vm.tracks, index: idx)
+                                    onTrackClick(t, vm.tracks, idx)
                                 }
                             }
                         }
@@ -58,7 +55,7 @@ struct HomeScreen: View {
                                 isCurrent: player.state.currentTrack?.id == t.id,
                                 isPlaying: player.state.isPlaying
                             ) {
-                                player.playTrack(t, queue: vm.tracks, index: idx)
+                                onTrackClick(t, vm.tracks, idx)
                             }
                         }
                     }
@@ -91,7 +88,7 @@ private struct GenreChips: View {
                             RoundedRectangle(cornerRadius: 16)
                                 .fill(selected == g.id ? Color.neonPink : Color.bgSurfaceHi)
                         )
-                        .foregroundStyle(selected == g.id ? .white : .textMid)
+                        .foregroundStyle(selected == g.id ? .white : Color.textMid)
                     }
                 }
             }
@@ -101,7 +98,7 @@ private struct GenreChips: View {
 }
 
 #Preview {
-    HomeScreen()
+    HomeScreen(onTrackClick: { _, _, _ in })
         .environmentObject(Player.shared)
         .preferredColorScheme(.dark)
 }
