@@ -35,13 +35,15 @@ final class Player: NSObject, ObservableObject {
         state.index = index
         state.currentTrack = track
         state.positionSec = 0
-        state.durationSec = 0
+        // Inicializar con la duración real del backend (YouTube metadata).
+        // El manifest HLS de YouTube a veces infla este valor; preferimos siempre
+        // la del backend cuando esté disponible.
+        state.durationSec = Float(track.durationSec ?? 0)
         state.lastError = nil
         state.loadingState = .extracting
         AudioSessionManager.shared.ensureActive()
         startPlayback(track: track)
         prefetchUpcoming()
-        Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
     func togglePlay() { if state.isPlaying { pause() } else { resume() } }
@@ -240,11 +242,27 @@ final class Player: NSObject, ObservableObject {
         timeObs = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] cm in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.state.positionSec = Float(CMTimeGetSeconds(cm))
+                let pos = Float(CMTimeGetSeconds(cm))
+                self.state.positionSec = pos
                 if self.state.durationSec == 0,
                    let d = self.queuePlayer?.currentItem?.duration,
                    d.isValid && !d.isIndefinite {
                     self.state.durationSec = Float(CMTimeGetSeconds(d))
+                }
+                // Si conocemos la duración REAL del track (backend) y el manifest
+                // de YouTube dura más, AVPlayer no dispara DidPlayToEndTime al
+                // acabar la música — forzamos la transición al siguiente track.
+                if self.state.isPlaying,
+                   let real = self.state.currentTrack?.durationSec, real > 0,
+                   pos >= Float(real) - 0.3 {
+                    // Comparar con la duración del item: si es claramente mayor,
+                    // adelantamos al siguiente. Tolerancia 5s para evitar falsos.
+                    let manifestSec: Float = (self.queuePlayer?.currentItem?.duration).flatMap {
+                        ($0.isValid && !$0.isIndefinite) ? Float(CMTimeGetSeconds($0)) : nil
+                    } ?? 0
+                    if manifestSec > Float(real) + 5 {
+                        self.handleEnded()
+                    }
                 }
             }
         }
@@ -257,7 +275,10 @@ final class Player: NSObject, ObservableObject {
                 guard let self else { return }
                 switch item.status {
                 case .readyToPlay:
-                    if let d = item.asset.duration as CMTime?, d.isValid, !d.isIndefinite {
+                    // Solo aceptar la duración del manifest si el backend NO proporcionó una.
+                    // El manifest HLS de YouTube a veces sobreestima la duración real.
+                    if self.state.durationSec == 0,
+                       let d = item.asset.duration as CMTime?, d.isValid, !d.isIndefinite {
                         self.state.durationSec = Float(CMTimeGetSeconds(d))
                     }
                     self.state.ready = true
