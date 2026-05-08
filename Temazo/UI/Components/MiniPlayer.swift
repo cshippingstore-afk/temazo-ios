@@ -23,7 +23,17 @@ struct MiniPlayer: View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
         return AnyView(
             VStack(spacing: 0) {
+                // Borde superior con glow rosa para separar del contenido
+                LinearGradient(
+                    colors: [Color.neonPink.opacity(0.55), Color.neonPurple.opacity(0.35), Color.neonPink.opacity(0.55)],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                .frame(height: 1)
+                .shadow(color: Color.neonPink.opacity(0.6), radius: 4, y: -1)
+
                 topRow(t)
+
+                // Slider con glow neón
                 NeonSlider(
                     value: Binding(
                         get: { isSeeking ? seekValue : Double(player.state.positionSec) },
@@ -35,13 +45,43 @@ struct MiniPlayer: View {
                         else { player.seekTo(seconds: Float(seekValue)); isSeeking = false }
                     }
                 )
-                .frame(height: 14)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 4)
+                .frame(height: 16)
+                .padding(.horizontal, 14)
+
+                // Tiempos sutiles bajo el slider — aprovecha el espacio
+                HStack {
+                    Text(format(isSeeking ? Float(seekValue) : player.state.positionSec))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                    Spacer()
+                    Text(format(player.state.durationSec))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 2)
+                .padding(.bottom, 6)
             }
-            .background(.ultraThinMaterial)
-            .background(Color.bgSurface.opacity(0.6))
+            .background(
+                ZStack {
+                    Color.bgRoot
+                    LinearGradient(
+                        colors: [
+                            Color.neonPink.opacity(0.10),
+                            Color.neonPurple.opacity(0.06),
+                            Color.bgSurface.opacity(0.0)
+                        ],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                }
+            )
         )
+    }
+
+    private func format(_ s: Float) -> String {
+        guard s.isFinite, s >= 0 else { return "0:00" }
+        let total = Int(s)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     @ViewBuilder
