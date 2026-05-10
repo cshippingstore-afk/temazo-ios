@@ -41,6 +41,11 @@ final class IframePlayerEngine: NSObject {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        // CLAVE para background audio: PiP enabled hace que iOS NO pause el media
+        // del WebView cuando la app va a background. Sin esto, el iframe se pausa
+        // al bloquear pantalla aunque AVAudioSession esté activa.
+        cfg.allowsPictureInPictureMediaPlayback = true
+        cfg.allowsAirPlayForMediaPlayback = true
         if #available(iOS 14, *) {
             cfg.defaultWebpagePreferences.allowsContentJavaScript = true
         }
@@ -48,14 +53,17 @@ final class IframePlayerEngine: NSObject {
         userContent.add(MessageHandler(engine: self), name: "player")
         cfg.userContentController = userContent
 
-        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: cfg)
+        // Tamaño 64×64 (no 1×1) — iOS trata WebViews demasiado pequeños como
+        // "no visibles" y suspende su rendering. 64×64 es suficiente para que
+        // el media engine lo considere activo, y con alpha=0 es invisible al usuario.
+        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 64, height: 64), configuration: cfg)
         wv.isOpaque = false
         wv.backgroundColor = .clear
         wv.scrollView.isScrollEnabled = false
-        wv.alpha = 0.01
+        wv.alpha = 0
         wv.isUserInteractionEnabled = false
 
-        // Anclar a la keyWindow para que el media engine lo trate como visible
+        // Anclar a la keyWindow para que el media engine lo trate como activo
         if let window = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first {
             window.addSubview(wv)

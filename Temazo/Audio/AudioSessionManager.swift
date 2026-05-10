@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import UIKit
 
 /// AVAudioSession para reproducción en background.
 /// Con WKWebView (motor iframe oficial), background audio requiere mantener
@@ -46,6 +47,30 @@ final class AudioSessionManager {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleRouteChange(_:)),
             name: AVAudioSession.routeChangeNotification, object: nil)
+        // Cuando la app va a background y hay reproducción activa, refresar
+        // sesión + silent loop por si iOS los suspendió antes del lifecycle event.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleEnteredBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
+
+    @objc private func handleEnteredBackground() {
+        if silentLoopActive {
+            ensureActive()
+            // Re-verificar que el AVAudioPlayer del silent loop sigue corriendo
+            if let p = silentPlayer, !p.isPlaying { p.play() }
+            print("[AudioSession] entered background — silent loop ensured")
+        }
+    }
+
+    @objc private func handleWillEnterForeground() {
+        if silentLoopActive {
+            ensureActive()
+            silentPlayer?.play()
+        }
     }
 
     func ensureActive() {
@@ -68,7 +93,10 @@ final class AudioSessionManager {
             do {
                 let p = try AVAudioPlayer(contentsOf: url)
                 p.numberOfLoops = -1     // loop infinito
-                p.volume = 0.001         // imperceptible (necesita NO ser 0 para que cuente como audio)
+                // Volumen 0.05 (no 0.001) — algunos iOS detectan volúmenes muy bajos
+                // como "muted" y no consideran que la app produzca audio real.
+                // 0.05 es imperceptible al oído pero NO muted para iOS.
+                p.volume = 0.05
                 p.prepareToPlay()
                 silentPlayer = p
             } catch {
