@@ -4,48 +4,27 @@ import Combine
 import UIKit
 import MediaPlayer
 
-/// Player híbrido — usa dos motores según foreground/background:
-///   - **Foreground**: IframePlayerEngine (iframe oficial youtube-nocookie)
-///                    → views cuentan, royalties al artista, 100% legal frente YT ToS.
-///   - **Background**: AvPlayerEngine (AVPlayer con stream extraído via yt_proxy.php)
-///                    → necesario porque WKWebView no funciona en background en iOS.
+/// Player con motor iframe oficial youtube-nocookie (vía IframePlayerEngine + WKWebView).
+/// El WKWebView vive VISIBLE (160×90 px en esquina superior derecha) para que iOS
+/// active PiP automático cuando la app va a background. Sin video visible, iOS no
+/// activaría PiP y el audio se pararía al bloquear pantalla.
 ///
-/// Switch automático en `UIApplication.didEnterBackgroundNotification` /
-/// `willEnterForegroundNotification`. La posición se sincroniza entre engines
-/// para que el cambio sea inaudible.
-///
-/// La API pública (playTrack, togglePlay, next, prev, seekTo) no cambia — la UI
-/// funciona igual.
+/// Ventajas: 100% legal frente a YouTube ToS, views cuentan, royalties al artista.
+/// Trade-off: el usuario ve un mini-thumbnail del video en pantalla durante reproducción.
 @MainActor
 final class Player: NSObject, ObservableObject {
     static let shared = Player()
     @Published var state = PlayerState()
 
-    private let iframe = IframePlayerEngine.shared
-    private let avplayer = AvPlayerEngine.shared
-
-    /// Engine activo: empieza en .iframe (foreground) y conmuta según lifecycle.
-    enum ActiveEngine { case iframe, avplayer }
-    private(set) var active: ActiveEngine = .iframe
-
+    private let engine = IframePlayerEngine.shared
     private var crossfadeMs: Int = 250
     private var hookedEngine = false
-    private var bgObserver: NSObjectProtocol?
-    private var fgObserver: NSObjectProtocol?
 
     override init() {
         super.init()
         UIApplication.shared.beginReceivingRemoteControlEvents()
         hookEngineCallbacks()
-        observeAppLifecycle()
     }
-
-    deinit {
-        if let o = bgObserver { NotificationCenter.default.removeObserver(o) }
-        if let o = fgObserver { NotificationCenter.default.removeObserver(o) }
-    }
-
-    // MARK: - API pública (no cambia)
 
     func playTrack(_ track: Track, queue: [Track], index: Int) {
         state.queue = queue
@@ -57,7 +36,7 @@ final class Player: NSObject, ObservableObject {
         state.loadingState = .extracting
         AudioSessionManager.shared.ensureActive()
         AudioSessionManager.shared.startSilentLoop()
-        startCurrentEngine(forTrack: track, fromSeconds: 0, autoplay: true)
+        startPlayback(track: track)
     }
 
     func togglePlay() { if state.isPlaying { pause() } else { resume() } }
@@ -65,18 +44,12 @@ final class Player: NSObject, ObservableObject {
     func resume() {
         AudioSessionManager.shared.ensureActive()
         AudioSessionManager.shared.startSilentLoop()
-        switch active {
-        case .iframe:   iframe.play()
-        case .avplayer: avplayer.play()
-        }
+        engine.play()
         state.isPlaying = true
     }
 
     func pause() {
-        switch active {
-        case .iframe:   iframe.pause()
-        case .avplayer: avplayer.pause()
-        }
+        engine.pause()
         state.isPlaying = false
         AudioSessionManager.shared.stopSilentLoop()
     }
@@ -90,7 +63,7 @@ final class Player: NSObject, ObservableObject {
         state.positionSec = 0
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
-        startCurrentEngine(forTrack: t, fromSeconds: 0, autoplay: true)
+        startPlayback(track: t)
     }
 
     func prev() {
@@ -102,112 +75,42 @@ final class Player: NSObject, ObservableObject {
         state.positionSec = 0
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
-        startCurrentEngine(forTrack: t, fromSeconds: 0, autoplay: true)
+        startPlayback(track: t)
     }
 
     func seekTo(seconds: Float) {
+        engine.seek(seconds: Double(seconds))
         state.positionSec = seconds
-        switch active {
-        case .iframe:   iframe.seek(seconds: Double(seconds))
-        case .avplayer: avplayer.seek(seconds: Double(seconds))
-        }
     }
 
     func stopAll() {
-        iframe.pause()
-        avplayer.stop()
+        engine.pause()
         AudioSessionManager.shared.stopSilentLoop()
         state = PlayerState()
     }
 
     func setCrossfadeMs(_ ms: Int) { crossfadeMs = max(150, min(6000, ms)) }
 
-    // MARK: - Internal: arrancar engine activo
+    // MARK: - Internal
 
-    private func startCurrentEngine(forTrack track: Track, fromSeconds: Double, autoplay: Bool) {
+    private func startPlayback(track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
             state.lastError = "no youtubeId"; state.loadingState = .failed; return
         }
-        switch active {
-        case .iframe:
-            iframe.load(youtubeId: ytId)
-            if fromSeconds > 0.5 {
-                // El iframe acepta seek tras un pequeño delay (carga del nuevo video)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                    self?.iframe.seek(seconds: fromSeconds)
-                }
-            }
-        case .avplayer:
-            avplayer.load(ytId: ytId, fromSeconds: fromSeconds, autoplay: autoplay)
-        }
+        engine.load(youtubeId: ytId)
     }
-
-    // MARK: - Lifecycle: switch entre engines
-
-    private func observeAppLifecycle() {
-        bgObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.switchToBackgroundEngine() }
-        }
-        fgObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.switchToForegroundEngine() }
-        }
-    }
-
-    /// Foreground → Background: pausar iframe, arrancar AVPlayer en la posición actual.
-    private func switchToBackgroundEngine() {
-        guard active == .iframe else { return }
-        guard let track = state.currentTrack, state.isPlaying else {
-            // Si no hay reproducción, no hacemos nada — al volver a foreground el
-            // iframe sigue como estaba pausado.
-            return
-        }
-        let pos = Double(state.positionSec)
-        print("[Player] FG→BG switch at \(pos)s — iframe→avplayer")
-        iframe.pause()
-        active = .avplayer
-        AudioSessionManager.shared.ensureActive()
-        AudioSessionManager.shared.startSilentLoop()
-        guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
-        avplayer.load(ytId: ytId, fromSeconds: pos, autoplay: true)
-    }
-
-    /// Background → Foreground: pausar AVPlayer, retomar iframe en la posición actual.
-    private func switchToForegroundEngine() {
-        guard active == .avplayer else { return }
-        let pos = avplayer.currentPosition
-        print("[Player] BG→FG switch at \(pos)s — avplayer→iframe")
-        // Actualizar state.positionSec con la posición real del avplayer
-        state.positionSec = Float(pos)
-        avplayer.pause()
-        active = .iframe
-        // El iframe puede haberse "dormido" en background, recargamos el track en
-        // su posición actual para asegurar continuidad.
-        guard let track = state.currentTrack,
-              let ytId = track.youtubeId, !ytId.isEmpty else { return }
-        iframe.load(youtubeId: ytId)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.iframe.seek(seconds: pos)
-        }
-    }
-
-    // MARK: - Engine callbacks
 
     private func hookEngineCallbacks() {
         guard !hookedEngine else { return }
         hookedEngine = true
 
-        // Iframe events
-        iframe.onReady = { print("[Player] iframe ready") }
+        engine.onReady = {
+            print("[Player] iframe engine ready")
+        }
 
-        iframe.onStateChange = { [weak self] s in
+        engine.onStateChange = { [weak self] s in
             Task { @MainActor [weak self] in
-                guard let self = self, self.active == .iframe else { return }
+                guard let self = self else { return }
                 switch s {
                 case .playing:
                     self.state.isPlaying = true
@@ -228,9 +131,9 @@ final class Player: NSObject, ObservableObject {
             }
         }
 
-        iframe.onTime = { [weak self] pos, dur in
+        engine.onTime = { [weak self] pos, dur in
             Task { @MainActor [weak self] in
-                guard let self = self, self.active == .iframe else { return }
+                guard let self = self else { return }
                 self.state.positionSec = Float(pos)
                 if self.state.durationSec == 0, dur > 0 {
                     self.state.durationSec = Float(dur)
@@ -238,35 +141,13 @@ final class Player: NSObject, ObservableObject {
             }
         }
 
-        iframe.onError = { [weak self] code in
+        engine.onError = { [weak self] code in
             Task { @MainActor [weak self] in
-                guard let self = self, self.active == .iframe else { return }
-                self.state.lastError = "YT error \(code)"
-                self.state.loadingState = .failed
-                if code == 100 || code == 101 || code == 150 { self.next() }
-            }
-        }
-
-        // AVPlayer events
-        avplayer.onTime = { [weak self] pos in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.active == .avplayer else { return }
-                self.state.positionSec = Float(pos)
-            }
-        }
-
-        avplayer.onEnded = { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.active == .avplayer else { return }
-                self.next()
-            }
-        }
-
-        avplayer.onError = { [weak self] msg in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.active == .avplayer else { return }
-                self.state.lastError = msg
-                self.state.loadingState = .failed
+                self?.state.lastError = "YouTube error \(code)"
+                self?.state.loadingState = .failed
+                if code == 100 || code == 101 || code == 150 {
+                    self?.next()
+                }
             }
         }
     }

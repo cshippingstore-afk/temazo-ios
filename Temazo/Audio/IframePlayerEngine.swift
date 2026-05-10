@@ -53,24 +53,37 @@ final class IframePlayerEngine: NSObject {
         userContent.add(MessageHandler(engine: self), name: "player")
         cfg.userContentController = userContent
 
-        // Tamaño 64×64 (no 1×1) — iOS trata WebViews demasiado pequeños como
-        // "no visibles" y suspende su rendering. 64×64 es suficiente para que
-        // el media engine lo considere activo, y con alpha=0 es invisible al usuario.
-        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 64, height: 64), configuration: cfg)
+        // Tamaño 160×90 (proporción 16:9) y VISIBLE — iOS solo activa PiP automático
+        // si el video estaba visible en pantalla cuando la app va a background.
+        // Lo anclamos en la esquina inferior derecha, encima del MiniPlayer.
+        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 160, height: 90), configuration: cfg)
         wv.isOpaque = false
-        wv.backgroundColor = .clear
+        wv.backgroundColor = .black
         wv.scrollView.isScrollEnabled = false
-        wv.alpha = 0
+        wv.scrollView.contentInsetAdjustmentBehavior = .never
+        wv.alpha = 1.0
         wv.isUserInteractionEnabled = false
+        wv.layer.cornerRadius = 6
+        wv.layer.masksToBounds = true
 
-        // Anclar a la keyWindow para que el media engine lo trate como activo
+        // Anclar a la keyWindow en una posición visible al usuario.
+        // Posición: esquina superior derecha, justo bajo el TopBar.
         if let window = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first {
+            // Top-right corner, debajo del status bar + TopBar
+            let safeTop = window.safeAreaInsets.top
+            wv.frame = CGRect(
+                x: window.bounds.width - 160 - 12,
+                y: safeTop + 60,
+                width: 160, height: 90
+            )
             window.addSubview(wv)
+            // Mantener encima de la UI
+            window.bringSubviewToFront(wv)
         }
         webView = wv
         wv.load(URLRequest(url: Self.playerURL))
-        print("[IframeEngine] webView loading \(Self.playerURL)")
+        print("[IframeEngine] webView loading \(Self.playerURL) (visible 160x90 for PiP)")
     }
 
     // MARK: - Comandos
