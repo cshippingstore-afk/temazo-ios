@@ -34,6 +34,7 @@ final class Player: NSObject, ObservableObject {
         state.lastError = nil
         state.loadingState = .extracting
         AudioSessionManager.shared.ensureActive()
+        AudioSessionManager.shared.startSilentLoop()
         startPlayback(track: track)
     }
 
@@ -41,6 +42,7 @@ final class Player: NSObject, ObservableObject {
 
     func resume() {
         AudioSessionManager.shared.ensureActive()
+        AudioSessionManager.shared.startSilentLoop()
         engine.play()
         state.isPlaying = true
     }
@@ -48,6 +50,7 @@ final class Player: NSObject, ObservableObject {
     func pause() {
         engine.pause()
         state.isPlaying = false
+        AudioSessionManager.shared.stopSilentLoop()
     }
 
     func next() {
@@ -81,6 +84,7 @@ final class Player: NSObject, ObservableObject {
 
     func stopAll() {
         engine.pause()
+        AudioSessionManager.shared.stopSilentLoop()
         state = PlayerState()
     }
 
