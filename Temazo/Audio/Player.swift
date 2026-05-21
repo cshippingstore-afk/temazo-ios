@@ -134,15 +134,22 @@ final class Player: NSObject, ObservableObject {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
             state.lastError = "no youtubeId"; state.loadingState = .failed; return
         }
+        // CRÍTICO: calentar yt_proxy.php SIEMPRE que cambia el track. Sin esto, el primer
+        // bloqueo de pantalla tras play tarda 30-60s porque yt-dlp tiene que extraer.
+        // El endpoint yt_resolve.php solo cachea la URL del stream (no proxya bytes) → rápido.
+        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+
         switch active {
         case .iframe:
             iframe.load(youtubeId: ytId)
             if fromSeconds > 0.5 {
-                // El iframe acepta seek tras un pequeño delay (carga del nuevo video)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                     self?.iframe.seek(seconds: fromSeconds)
                 }
             }
+            // Pre-armado del AVPlayer (sin play). Cuando la app va a BG, el item
+            // ya está armado → seek+play instantáneo.
+            avplayer.preload(ytId: ytId)
         case .avplayer:
             avplayer.load(ytId: ytId, fromSeconds: fromSeconds, autoplay: autoplay)
         }
@@ -166,21 +173,27 @@ final class Player: NSObject, ObservableObject {
     }
 
     /// Foreground → Background: pausar iframe, arrancar AVPlayer en la posición actual.
+    /// El AVPlayer YA está pre-cargado (preload en playTrack), así que aquí solo seek + play.
     private func switchToBackgroundEngine() {
         guard active == .iframe else { return }
         guard let track = state.currentTrack, state.isPlaying else {
-            // Si no hay reproducción, no hacemos nada — al volver a foreground el
-            // iframe sigue como estaba pausado.
             return
         }
         let pos = Double(state.positionSec)
-        print("[Player] FG→BG switch at \(pos)s — iframe→avplayer")
+        print("[Player] FG→BG switch at \(pos)s — iframe→avplayer (preloaded)")
         iframe.pause()
         active = .avplayer
         AudioSessionManager.shared.ensureActive()
         AudioSessionManager.shared.startSilentLoop()
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
-        avplayer.load(ytId: ytId, fromSeconds: pos, autoplay: true)
+        // Si el preload coincide con el track actual, solo seek+play (instantáneo).
+        // Si no (track cambió entre preload y switch), hacer load completo como fallback.
+        if avplayer.currentYtId == ytId {
+            avplayer.seek(seconds: pos)
+            avplayer.play()
+        } else {
+            avplayer.load(ytId: ytId, fromSeconds: pos, autoplay: true)
+        }
     }
 
     /// Background → Foreground: pausar AVPlayer, retomar iframe en la posición actual.

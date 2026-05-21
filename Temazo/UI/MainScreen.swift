@@ -188,18 +188,24 @@ struct MainScreen: View {
                     detailStack.removeAll()  // siempre limpia stack al pulsar tab
                     if tab != t { tab = t }
                 }) {
+                    // El highlight solo cubre el icono+label, no se extiende hasta el home indicator.
                     VStack(spacing: 2) {
                         Image(systemName: t.icon)
                             .font(.system(size: 18, weight: active ? .bold : .regular))
                         Text(t.label).font(.system(size: 10))
                     }
                     .foregroundStyle(active ? Color.neonPink : Color.white.opacity(0.55))
-                    .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(active ? Color.neonPink.opacity(0.15) : Color.clear)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(
+                        active ? Color.neonPink.opacity(0.15) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.plain)
             }
         }
+        .padding(.vertical, 6)
         .background(Color(red: 0.04, green: 0.04, blue: 0.06))
     }
 

@@ -35,6 +35,38 @@ final class AvPlayerEngine: NSObject {
         super.init()
     }
 
+    /// Pre-carga del item SIN reproducir. Llamar en foreground cuando se elige un track
+    /// para tener el stream listo cuando la app vaya a background. Esto evita que iOS
+    /// suspenda el proceso esperando los 30-60s del primer extracto via yt-dlp.
+    func preload(ytId: String) {
+        guard !ytId.isEmpty else { return }
+        if currentYtId == ytId, player?.currentItem != nil { return }   // ya cargado
+        currentYtId = ytId
+        var c = URLComponents(string: Self.proxyBase)
+        c?.queryItems = [URLQueryItem(name: "id", value: ytId)]
+        guard let url = c?.url else { return }
+
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset, automaticallyLoadedAssetKeys: ["playable", "duration"])
+        item.preferredForwardBufferDuration = 4.0
+
+        if let p = player {
+            p.replaceCurrentItem(with: item)
+        } else {
+            let p = AVPlayer(playerItem: item)
+            p.automaticallyWaitsToMinimizeStalling = false
+            p.allowsExternalPlayback = false
+            p.volume = 1.0
+            player = p
+        }
+        // Forzar al sistema a empezar a buffear sin sonar (rate 0)
+        player?.rate = 0
+        // Disparar la red — iOS empieza a descargar buffer.
+        // No llamamos play() para no producir audio mientras suena el iframe en FG.
+        attachObservers(for: item)
+        print("[AvPlayer] PRELOAD yt=\(ytId) (no autoplay)")
+    }
+
     func load(ytId: String, fromSeconds: Double, autoplay: Bool = true) {
         guard !ytId.isEmpty else { return }
         currentYtId = ytId
