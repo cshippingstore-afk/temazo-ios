@@ -143,10 +143,13 @@ final class Player: NSObject, ObservableObject {
 
         print("[Player] streaming from \(proxyURL.absoluteString)")
         let item = AVPlayerItem(url: proxyURL)
-        item.preferredForwardBufferDuration = 4.0
         let p = AVPlayer(playerItem: item)
-        // Empieza tan pronto haya buffer mínimo (no esperar a llenar buffer perfecto)
-        p.automaticallyWaitsToMinimizeStalling = false
+        // automaticallyWaitsToMinimizeStalling = true (default): AVPlayer gestiona el
+        // buffer y NO reinicia el stream si hay underrun. Si lo ponemos en false,
+        // cuando el buffer se ahoga AVPlayer cierra la conexión y abre una nueva con
+        // Range desde 0 — pero yt_proxy.php no devuelve 206 Partial Content fiable,
+        // así que el contador se REINICIA. Mantener en true.
+        p.automaticallyWaitsToMinimizeStalling = true
         p.allowsExternalPlayback = false
         p.actionAtItemEnd = .none
         avPlayer = p
