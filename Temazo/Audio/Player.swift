@@ -36,11 +36,14 @@ final class Player: NSObject, ObservableObject {
         state.index = index
         state.currentTrack = track
         state.positionSec = 0
-        state.durationSec = 0
+        // Duración del backend = source of truth (yt-dlp/AVAsset a veces reporta x2 por
+        // headers del proxy o contenedor sin metadata de duración fiable).
+        state.durationSec = Float(track.durationSec ?? 0)
         state.lastError = nil
         state.loadingState = .extracting
         AudioSessionManager.shared.ensureActive()
         startAVPlayback(for: track)
+        prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
@@ -70,8 +73,11 @@ final class Player: NSObject, ObservableObject {
         let t = state.queue[nextIdx]
         state.index = nextIdx
         state.currentTrack = t
+        state.positionSec = 0
+        state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
         startAVPlayback(for: t)
+        prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
@@ -81,9 +87,23 @@ final class Player: NSObject, ObservableObject {
         let t = state.queue[prevIdx]
         state.index = prevIdx
         state.currentTrack = t
+        state.positionSec = 0
+        state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
         startAVPlayback(for: t)
+        prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
+    }
+
+    /// Pre-resuelve la URL del próximo track en el backend para que cuando suene `next()`
+    /// (o auto-next al terminar el actual) el cache del proxy esté caliente → sin esperar
+    /// los 30-60s de yt-dlp.
+    private func prewarmNext() {
+        guard state.queue.count > 1 else { return }
+        let nextIdx = (state.index + 1) % state.queue.count
+        if let yt = state.queue[nextIdx].youtubeId, !yt.isEmpty {
+            TemazoAPI.shared.prefetchYouTubeURLs([yt])
+        }
     }
 
     func seekTo(seconds: Float) {
@@ -110,6 +130,11 @@ final class Player: NSObject, ObservableObject {
             state.lastError = "no youtubeId"; state.loadingState = .failed
             print("[Player] no youtubeId for track id=\(track.id)"); return
         }
+        // Calienta el cache del proxy ANTES de pedir bytes. yt_resolve.php solo cachea
+        // la URL del stream (sin proxy de bytes) → cuando AVPlayer abre yt_proxy.php
+        // los bytes empiezan a fluir inmediatamente sin esperar a yt-dlp.
+        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+
         guard let proxyURL = buildProxyURL(ytId: ytId) else {
             state.lastError = "invalid proxy URL"; state.loadingState = .failed
             return
@@ -118,8 +143,10 @@ final class Player: NSObject, ObservableObject {
 
         print("[Player] streaming from \(proxyURL.absoluteString)")
         let item = AVPlayerItem(url: proxyURL)
+        item.preferredForwardBufferDuration = 4.0
         let p = AVPlayer(playerItem: item)
-        p.automaticallyWaitsToMinimizeStalling = true
+        // Empieza tan pronto haya buffer mínimo (no esperar a llenar buffer perfecto)
+        p.automaticallyWaitsToMinimizeStalling = false
         p.allowsExternalPlayback = false
         p.actionAtItemEnd = .none
         avPlayer = p
@@ -133,7 +160,10 @@ final class Player: NSObject, ObservableObject {
                 guard let self else { return }
                 switch item.status {
                 case .readyToPlay:
-                    if let d = item.asset.duration as CMTime?,
+                    // Solo escribir desde AVAsset si NO tenemos duración del backend.
+                    // El backend es la fuente fiable; el AVAsset a veces reporta x2.
+                    if self.state.durationSec == 0,
+                       let d = item.asset.duration as CMTime?,
                        d.isValid && !d.isIndefinite {
                         self.state.durationSec = Float(CMTimeGetSeconds(d))
                     }
