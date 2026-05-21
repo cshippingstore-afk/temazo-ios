@@ -4,81 +4,58 @@ import Combine
 import UIKit
 import MediaPlayer
 
-/// Player híbrido — usa dos motores según foreground/background:
-///   - **Foreground**: IframePlayerEngine (iframe oficial youtube-nocookie)
-///                    → views cuentan, royalties al artista, 100% legal frente YT ToS.
-///   - **Background**: AvPlayerEngine (AVPlayer con stream extraído via yt_proxy.php)
-///                    → necesario porque WKWebView no funciona en background en iOS.
+/// Player nativo basado en AVPlayer.
+/// La URL del stream YouTube se obtiene del proxy de temazo.es:
+///   https://temazo.es/api/yt_proxy.php?id=<youtube_id>
+/// El backend usa yt-dlp para resolver y reenviar bytes (bypaseando IP-binding de YouTube).
 ///
-/// Switch automático en `UIApplication.didEnterBackgroundNotification` /
-/// `willEnterForegroundNotification`. La posición se sincroniza entre engines
-/// para que el cambio sea inaudible.
-///
-/// La API pública (playTrack, togglePlay, next, prev, seekTo) no cambia — la UI
-/// funciona igual.
+/// Resultado: AVPlayer reproduce un stream desde temazo.es → background audio funciona
+/// nativamente, igual que Spotify/Apple Music.
 @MainActor
 final class Player: NSObject, ObservableObject {
     static let shared = Player()
     @Published var state = PlayerState()
 
-    private let iframe = IframePlayerEngine.shared
-    private let avplayer = AvPlayerEngine.shared
+    private static let proxyBase = "https://temazo.es/api/yt_proxy.php"
 
-    /// Engine activo: empieza en .iframe (foreground) y conmuta según lifecycle.
-    enum ActiveEngine { case iframe, avplayer }
-    private(set) var active: ActiveEngine = .iframe
-
+    private var avPlayer: AVPlayer?
+    private var statusObs: NSKeyValueObservation?
+    private var rateObs: NSKeyValueObservation?
+    private var timeObs: Any?
+    private var endObs: NSObjectProtocol?
+    private var stallObs: NSObjectProtocol?
     private var crossfadeMs: Int = 250
-    private var hookedEngine = false
-    private var bgObserver: NSObjectProtocol?
-    private var fgObserver: NSObjectProtocol?
 
     override init() {
         super.init()
         UIApplication.shared.beginReceivingRemoteControlEvents()
-        hookEngineCallbacks()
-        observeAppLifecycle()
     }
-
-    deinit {
-        if let o = bgObserver { NotificationCenter.default.removeObserver(o) }
-        if let o = fgObserver { NotificationCenter.default.removeObserver(o) }
-    }
-
-    // MARK: - API pública (no cambia)
 
     func playTrack(_ track: Track, queue: [Track], index: Int) {
         state.queue = queue
         state.index = index
         state.currentTrack = track
         state.positionSec = 0
-        state.durationSec = Float(track.durationSec ?? 0)
+        state.durationSec = 0
         state.lastError = nil
         state.loadingState = .extracting
         AudioSessionManager.shared.ensureActive()
-        AudioSessionManager.shared.startSilentLoop()
-        startCurrentEngine(forTrack: track, fromSeconds: 0, autoplay: true)
+        startAVPlayback(for: track)
+        Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
     func togglePlay() { if state.isPlaying { pause() } else { resume() } }
 
     func resume() {
         AudioSessionManager.shared.ensureActive()
-        AudioSessionManager.shared.startSilentLoop()
-        switch active {
-        case .iframe:   iframe.play()
-        case .avplayer: avplayer.play()
-        }
+        avPlayer?.play()
         state.isPlaying = true
     }
 
     func pause() {
-        switch active {
-        case .iframe:   iframe.pause()
-        case .avplayer: avplayer.pause()
-        }
+        print("[Player] pause() called")
+        avPlayer?.pause()
         state.isPlaying = false
-        AudioSessionManager.shared.stopSilentLoop()
     }
 
     /// Añade un track al final de la cola actual sin interrumpir reproducción.
@@ -93,10 +70,9 @@ final class Player: NSObject, ObservableObject {
         let t = state.queue[nextIdx]
         state.index = nextIdx
         state.currentTrack = t
-        state.positionSec = 0
-        state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
-        startCurrentEngine(forTrack: t, fromSeconds: 0, autoplay: true)
+        startAVPlayback(for: t)
+        Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
     func prev() {
@@ -105,188 +81,130 @@ final class Player: NSObject, ObservableObject {
         let t = state.queue[prevIdx]
         state.index = prevIdx
         state.currentTrack = t
-        state.positionSec = 0
-        state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
-        startCurrentEngine(forTrack: t, fromSeconds: 0, autoplay: true)
+        startAVPlayback(for: t)
+        Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
     func seekTo(seconds: Float) {
+        guard let p = avPlayer else { return }
+        let cm = CMTime(seconds: Double(seconds), preferredTimescale: 600)
+        p.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
         state.positionSec = seconds
-        switch active {
-        case .iframe:   iframe.seek(seconds: Double(seconds))
-        case .avplayer: avplayer.seek(seconds: Double(seconds))
-        }
     }
 
     func stopAll() {
-        iframe.pause()
-        avplayer.stop()
-        AudioSessionManager.shared.stopSilentLoop()
+        teardownObservers()
+        avPlayer?.pause()
+        avPlayer?.replaceCurrentItem(with: nil)
+        avPlayer = nil
         state = PlayerState()
     }
 
     func setCrossfadeMs(_ ms: Int) { crossfadeMs = max(150, min(6000, ms)) }
 
-    // MARK: - Internal: arrancar engine activo
+    // MARK: - AVPlayer streaming desde el proxy backend
 
-    private func startCurrentEngine(forTrack track: Track, fromSeconds: Double, autoplay: Bool) {
+    private func startAVPlayback(for track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
-            state.lastError = "no youtubeId"; state.loadingState = .failed; return
+            state.lastError = "no youtubeId"; state.loadingState = .failed
+            print("[Player] no youtubeId for track id=\(track.id)"); return
         }
-        // CRÍTICO: calentar yt_proxy.php SIEMPRE que cambia el track. Sin esto, el primer
-        // bloqueo de pantalla tras play tarda 30-60s porque yt-dlp tiene que extraer.
-        // El endpoint yt_resolve.php solo cachea la URL del stream (no proxya bytes) → rápido.
-        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
-
-        switch active {
-        case .iframe:
-            iframe.load(youtubeId: ytId)
-            if fromSeconds > 0.5 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                    self?.iframe.seek(seconds: fromSeconds)
-                }
-            }
-            // Pre-armado del AVPlayer (sin play). Cuando la app va a BG, el item
-            // ya está armado → seek+play instantáneo.
-            avplayer.preload(ytId: ytId)
-        case .avplayer:
-            avplayer.load(ytId: ytId, fromSeconds: fromSeconds, autoplay: autoplay)
-        }
-    }
-
-    // MARK: - Lifecycle: switch entre engines
-
-    private func observeAppLifecycle() {
-        bgObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.switchToBackgroundEngine() }
-        }
-        fgObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.switchToForegroundEngine() }
-        }
-    }
-
-    /// Foreground → Background: pausar iframe, arrancar AVPlayer en la posición actual.
-    /// El AVPlayer YA está pre-cargado (preload en playTrack), así que aquí solo seek + play.
-    private func switchToBackgroundEngine() {
-        guard active == .iframe else { return }
-        guard let track = state.currentTrack, state.isPlaying else {
+        guard let proxyURL = buildProxyURL(ytId: ytId) else {
+            state.lastError = "invalid proxy URL"; state.loadingState = .failed
             return
         }
-        let pos = Double(state.positionSec)
-        print("[Player] FG→BG switch at \(pos)s — iframe→avplayer (preloaded)")
-        iframe.pause()
-        active = .avplayer
-        AudioSessionManager.shared.ensureActive()
-        AudioSessionManager.shared.startSilentLoop()
-        guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
-        // Si el preload coincide con el track actual, solo seek+play (instantáneo).
-        // Si no (track cambió entre preload y switch), hacer load completo como fallback.
-        if avplayer.currentYtId == ytId {
-            avplayer.seek(seconds: pos)
-            avplayer.play()
-        } else {
-            avplayer.load(ytId: ytId, fromSeconds: pos, autoplay: true)
-        }
-    }
+        teardownObservers()
 
-    /// Background → Foreground: pausar AVPlayer, retomar iframe en la posición actual.
-    private func switchToForegroundEngine() {
-        guard active == .avplayer else { return }
-        let pos = avplayer.currentPosition
-        print("[Player] BG→FG switch at \(pos)s — avplayer→iframe")
-        // Actualizar state.positionSec con la posición real del avplayer
-        state.positionSec = Float(pos)
-        avplayer.pause()
-        active = .iframe
-        // El iframe puede haberse "dormido" en background, recargamos el track en
-        // su posición actual para asegurar continuidad.
-        guard let track = state.currentTrack,
-              let ytId = track.youtubeId, !ytId.isEmpty else { return }
-        iframe.load(youtubeId: ytId)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.iframe.seek(seconds: pos)
-        }
-    }
+        print("[Player] streaming from \(proxyURL.absoluteString)")
+        let item = AVPlayerItem(url: proxyURL)
+        let p = AVPlayer(playerItem: item)
+        p.automaticallyWaitsToMinimizeStalling = true
+        p.allowsExternalPlayback = false
+        p.actionAtItemEnd = .none
+        avPlayer = p
 
-    // MARK: - Engine callbacks
+        // Log estado de la audio session
+        let s = AVAudioSession.sharedInstance()
+        print("[Player] AudioSession.category=\(s.category) mode=\(s.mode)")
 
-    private func hookEngineCallbacks() {
-        guard !hookedEngine else { return }
-        hookedEngine = true
-
-        // Iframe events
-        iframe.onReady = { print("[Player] iframe ready") }
-
-        iframe.onStateChange = { [weak self] s in
+        statusObs = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
-                guard let self = self, self.active == .iframe else { return }
-                switch s {
-                case .playing:
-                    self.state.isPlaying = true
+                guard let self else { return }
+                switch item.status {
+                case .readyToPlay:
+                    if let d = item.asset.duration as CMTime?,
+                       d.isValid && !d.isIndefinite {
+                        self.state.durationSec = Float(CMTimeGetSeconds(d))
+                    }
                     self.state.ready = true
+                    self.state.loadingState = .ready
+                    print("[Player] readyToPlay duration=\(self.state.durationSec)s")
+                case .failed:
+                    let err = item.error?.localizedDescription ?? "unknown"
+                    self.state.lastError = err
+                    self.state.loadingState = .failed
+                    print("[Player] item FAILED: \(err)")
+                case .unknown: break
+                @unknown default: break
+                }
+            }
+        }
+
+        rateObs = p.observe(\.rate, options: [.new]) { [weak self] p, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if p.rate > 0 {
                     self.state.loadingState = .playing
-                case .paused:
-                    self.state.isPlaying = false
-                    self.state.loadingState = .ready
-                case .buffering:
-                    self.state.loadingState = .stalled
-                case .ended:
-                    self.next()
-                case .cued:
-                    self.state.loadingState = .ready
-                case .unstarted, .unknown:
-                    break
+                    self.state.isPlaying = true
                 }
             }
         }
 
-        iframe.onTime = { [weak self] pos, dur in
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
+        timeObs = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] cm in
             Task { @MainActor [weak self] in
-                guard let self = self, self.active == .iframe else { return }
-                self.state.positionSec = Float(pos)
-                if self.state.durationSec == 0, dur > 0 {
-                    self.state.durationSec = Float(dur)
+                guard let self else { return }
+                self.state.positionSec = Float(CMTimeGetSeconds(cm))
+                if self.state.durationSec == 0,
+                   let d = self.avPlayer?.currentItem?.duration,
+                   d.isValid && !d.isIndefinite {
+                    self.state.durationSec = Float(CMTimeGetSeconds(d))
                 }
             }
         }
 
-        iframe.onError = { [weak self] code in
+        endObs = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.next() }
+        }
+
+        stallObs = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self = self, self.active == .iframe else { return }
-                self.state.lastError = "YT error \(code)"
-                self.state.loadingState = .failed
-                if code == 100 || code == 101 || code == 150 { self.next() }
+                self?.state.loadingState = .stalled
+                print("[Player] stalled")
             }
         }
 
-        // AVPlayer events
-        avplayer.onTime = { [weak self] pos in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.active == .avplayer else { return }
-                self.state.positionSec = Float(pos)
-            }
-        }
+        AudioSessionManager.shared.ensureActive()
+        p.play()
+        state.isPlaying = true
+    }
 
-        avplayer.onEnded = { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.active == .avplayer else { return }
-                self.next()
-            }
-        }
+    private func buildProxyURL(ytId: String) -> URL? {
+        var comps = URLComponents(string: Self.proxyBase)
+        comps?.queryItems = [URLQueryItem(name: "id", value: ytId)]
+        return comps?.url
+    }
 
-        avplayer.onError = { [weak self] msg in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.active == .avplayer else { return }
-                self.state.lastError = msg
-                self.state.loadingState = .failed
-            }
-        }
+    private func teardownObservers() {
+        statusObs?.invalidate(); statusObs = nil
+        rateObs?.invalidate(); rateObs = nil
+        if let obs = timeObs { avPlayer?.removeTimeObserver(obs); timeObs = nil }
+        if let obs = endObs { NotificationCenter.default.removeObserver(obs); endObs = nil }
+        if let obs = stallObs { NotificationCenter.default.removeObserver(obs); stallObs = nil }
     }
 }
