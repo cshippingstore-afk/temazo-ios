@@ -5,11 +5,27 @@ struct HomeScreen: View {
     @StateObject private var vm = HomeViewModel()
     @EnvironmentObject var player: Player
 
+    @State private var showCountryPicker: Bool = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                LiveIndicator(minutes: vm.lastUpdateMin)
-                    .padding(.horizontal, 16)
+                HStack {
+                    LiveIndicator(minutes: vm.lastUpdateMin)
+                    Spacer()
+                    Button(action: { showCountryPicker = true }) {
+                        HStack(spacing: 6) {
+                            CountryFlag(cc: vm.country, height: 12)
+                            Text(vm.country)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.75))
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16)
 
                 GenreChips(genres: vm.genres, selected: vm.selectedGenre) { g in
                     Task { await vm.loadTrending(g.id) }
@@ -66,6 +82,46 @@ struct HomeScreen: View {
         }
         .task { await vm.loadTrending(vm.selectedGenre) }
         .refreshable { await vm.forceRefresh() }
+        .sheet(isPresented: $showCountryPicker) {
+            CountryPickerSheet(current: vm.country, onPick: { cc in
+                vm.setCountry(cc)
+                showCountryPicker = false
+            }, onClose: { showCountryPicker = false })
+        }
+    }
+}
+
+struct CountryPickerSheet: View {
+    let current: String
+    var onPick: (String) -> Void
+    var onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(HISPANIC_COUNTRIES, id: \.cc) { item in
+                    Button(action: { onPick(item.cc) }) {
+                        HStack(spacing: 12) {
+                            CountryFlag(cc: item.cc, height: 18)
+                            Text(item.name)
+                                .font(.system(size: 15, weight: current == item.cc ? .bold : .regular))
+                                .foregroundStyle(current == item.cc ? Color.neonPink : .white)
+                            Spacer()
+                            Text(item.cc).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.4))
+                        }
+                    }
+                    .listRowBackground(current == item.cc ? Color.neonPink.opacity(0.15) : Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color(red: 0.10, green: 0.04, blue: 0.18))
+            .navigationTitle("País para los Tops")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cerrar") { onClose() } }
+            }
+        }
     }
 }
 

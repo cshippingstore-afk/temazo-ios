@@ -1,16 +1,14 @@
 import SwiftUI
 
-enum AppTab: Int, Hashable {
-    case home, search, account
-}
-
-/// Detail navegación — réplica del sealed Detail del Android.
+/// Detail — réplica del sealed Detail del Android.
 enum Detail: Hashable {
     case artist(id: Int64?, slug: String?, name: String?)
     case album(id: Int64?, slug: String?)
     case history
     case following
     case favorites
+    case account
+    case playlist(id: Int64, name: String?)
 }
 
 extension Notification.Name {
@@ -28,6 +26,7 @@ struct MainScreen: View {
     @EnvironmentObject var player: Player
     @EnvironmentObject var auth: AuthRepository
     @EnvironmentObject var favorites: FavoritesRepo
+    @StateObject private var optionsBus = TrackOptionsBus.shared
 
     var body: some View {
         ZStack {
@@ -36,25 +35,26 @@ struct MainScreen: View {
             VStack(spacing: 0) {
                 TemazoTopBar(
                     isPlaying: player.state.isPlaying,
-                    currentTab: tab,
-                    onTabSelected: { newTab in
-                        tab = newTab
-                        detailStack.removeAll()
-                    }
+                    onAvatarClick: { detailStack.append(.account) }
                 )
                 ZStack {
                     if let last = detailStack.last {
                         detailView(for: last)
                     } else {
                         switch tab {
-                        case .home:    HomeScreen(onTrackClick: onPlay)
-                        case .search:  SearchScreen(onTrackClick: onPlay)
-                        case .account: AccountScreen(
-                            onHistoryClick: { detailStack.append(.history) },
-                            onFollowingClick: { detailStack.append(.following) },
-                            onFavoritesClick: { detailStack.append(.favorites) },
+                        case .home:      InicioScreen(onTrackClick: onPlay,
+                                                     onPlaylistClick: { _ in /* TODO: vista pública */ })
+                        case .top:       HomeScreen(onTrackClick: onPlay)
+                        case .search:    SearchScreen(
+                            onTrackClick: onPlay,
+                            onArtistClick: { id, slug, name in
+                                detailStack.append(.artist(id: id, slug: slug, name: name))
+                            }
+                        )
+                        case .playlists: PlaylistsScreen(
+                            onAvatarClick: { detailStack.append(.account) },
                             onPlaylistClick: { p in
-                                Task { await playPlaylist(p) }
+                                detailStack.append(.playlist(id: p.id, name: p.name))
                             }
                         )
                         }
@@ -72,6 +72,8 @@ struct MainScreen: View {
                     )
                     .transition(.move(edge: .bottom))
                 }
+
+                bottomNav
             }
 
             if fullPlayerShown, player.state.currentTrack != nil {
@@ -86,7 +88,6 @@ struct MainScreen: View {
                 .zIndex(10)
             }
 
-            // Toast
             if let txt = toastText {
                 VStack {
                     Spacer()
@@ -120,22 +121,55 @@ struct MainScreen: View {
         .sheet(isPresented: $showLoadPlaylist) {
             PlaylistPickerSheet(onClose: { showLoadPlaylist = false })
         }
+        // Sheet de opciones de track (long-press en cualquier TrackRow)
+        .sheet(item: $optionsBus.selectedTrack) { t in
+            TrackOptionsSheet(
+                track: t,
+                isFavorite: favorites.contains(t.id),
+                onDismiss: { optionsBus.dismiss() },
+                onToggleFav: { FavToggle.toggle(trackId: t.id, favRepo: favorites) },
+                onAddToPlaylist: {
+                    if auth.currentUser == nil {
+                        showToast("Inicia sesión para añadir a playlists")
+                        detailStack = [.account]
+                    } else {
+                        addToPlaylistTrack = t
+                    }
+                },
+                onAddToQueue: {
+                    player.addToQueue(t)
+                    showToast("Añadida a la cola")
+                },
+                onGoToArtist: {
+                    detailStack.append(.artist(id: t.artistId, slug: t.artistSlug, name: t.artistName))
+                },
+                onGoToAlbum: {
+                    detailStack.append(.album(id: t.albumId, slug: t.albumSlug))
+                },
+                onShare: {
+                    let url = "https://temazo.es/\(t.artistSlug ?? "")/\(t.slug ?? "")"
+                    let text = "\(t.title) — \(t.artistName ?? "")\n\(url)"
+                    let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let root = scene.windows.first?.rootViewController {
+                        root.present(av, animated: true)
+                    }
+                }
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .temazoSwitchToAccountTab)) { _ in
-            tab = .account
-            detailStack.removeAll()
+            // Mantener compatibilidad: si algo dispara este evento, abrir Account como detail.
+            if !detailStack.contains(.account) { detailStack.append(.account) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .temazoToastLoginRequired)) { _ in
             showToast("Inicia sesión para continuar")
-            tab = .account
-            detailStack.removeAll()
+            detailStack = [.account]
         }
-        // Auto-history al cambiar el currentTrack
         .onChange(of: player.state.currentTrack?.id) { _, newId in
             guard let id = newId else { return }
             guard auth.currentUser != nil else { return }
             Task { _ = try? await TemazoAPI.shared.historyAdd(id, source: "app") }
         }
-        // Restaurar sesión + sync favs al arrancar y cuando cambia user
         .task {
             await auth.refreshSession()
             await syncFavs()
@@ -143,6 +177,30 @@ struct MainScreen: View {
         .onChange(of: auth.currentUser?.id) { _, _ in
             Task { await syncFavs() }
         }
+    }
+
+    // MARK: - Bottom nav
+    private var bottomNav: some View {
+        HStack(spacing: 0) {
+            ForEach(AppTab.allCases, id: \.self) { t in
+                let active = (tab == t)
+                Button(action: {
+                    detailStack.removeAll()  // siempre limpia stack al pulsar tab
+                    if tab != t { tab = t }
+                }) {
+                    VStack(spacing: 2) {
+                        Image(systemName: t.icon)
+                            .font(.system(size: 18, weight: active ? .bold : .regular))
+                        Text(t.label).font(.system(size: 10))
+                    }
+                    .foregroundStyle(active ? Color.neonPink : Color.white.opacity(0.55))
+                    .frame(maxWidth: .infinity).frame(height: 56)
+                    .background(active ? Color.neonPink.opacity(0.15) : Color.clear)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(Color(red: 0.04, green: 0.04, blue: 0.06))
     }
 
     @ViewBuilder
@@ -182,11 +240,26 @@ struct MainScreen: View {
                 onBack: { _ = detailStack.popLast() },
                 onTrackClick: onPlay
             )
+        case .account:
+            AccountScreen(
+                onHistoryClick: { detailStack.append(.history) },
+                onFollowingClick: { detailStack.append(.following) },
+                onFavoritesClick: { detailStack.append(.favorites) },
+                onPlaylistClick: { p in
+                    detailStack.append(.playlist(id: p.id, name: p.name))
+                }
+            )
+        case .playlist(let id, let name):
+            PlaylistDetailScreen(
+                playlistId: id,
+                playlistName: name,
+                onBack: { _ = detailStack.popLast() },
+                onPlay: onPlay
+            )
         }
     }
 
     // MARK: - Handlers
-
     private func onPlay(_ track: Track, _ list: [Track], _ idx: Int) {
         player.playTrack(track, queue: list, index: idx)
     }
@@ -208,24 +281,13 @@ struct MainScreen: View {
     private func handleAddToPlaylist() {
         if auth.currentUser == nil {
             showToast("Inicia sesión para añadir a playlists")
-            tab = .account
-            detailStack.removeAll()
+            detailStack = [.account]
             fullPlayerShown = false
             return
         }
         if let t = player.state.currentTrack {
             addToPlaylistTrack = t
         }
-    }
-
-    private func playPlaylist(_ p: Playlist) async {
-        do {
-            let resp = try await TemazoAPI.shared.playlistTracks(p.id)
-            let valid = resp.tracks.filter { !($0.youtubeId ?? "").isEmpty }
-            guard !valid.isEmpty else { return }
-            player.playTrack(valid[0], queue: valid, index: 0)
-            TemazoAPI.shared.prefetchYouTubeURLs(valid.compactMap { $0.youtubeId })
-        } catch {}
     }
 
     private func syncFavs() async {
@@ -246,8 +308,6 @@ struct MainScreen: View {
         }
     }
 }
-
-// Track tiene que ser Identifiable para el sheet(item:). Ya lo es.
 
 #Preview {
     MainScreen()

@@ -223,10 +223,37 @@ final class TemazoAPI {
         return try await send(req, PlaylistTracksResponse.self)
     }
 
+    // Feed de lo último de los artistas que sigue el usuario (Inicio).
+    func feedFollowing(limit: Int = 20) async throws -> PlaylistTracksResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "feed_following", "limit": String(limit)])
+        return try await send(req, PlaylistTracksResponse.self)
+    }
+
+    // Playlists públicas top de Temazo (público, sin login).
+    func discoverPlaylists(limit: Int = 20) async throws -> DiscoverPlaylistsResponse {
+        let req = request("api/discover_playlists.php", query: ["limit": String(limit)])
+        return try await send(req, DiscoverPlaylistsResponse.self)
+    }
+
     @discardableResult
     func favToggle(_ trackId: Int64) async throws -> GenericResponse {
         let req = request("api/user_data.php", query: ["a": "fav_toggle"],
                           method: "POST", form: ["track_id": String(trackId)])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func passwordChange(current: String, new: String) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "password_change"],
+                          method: "POST", form: ["current": current, "new": new])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func deleteAccount(password: String) async throws -> GenericResponse {
+        let req = request("api/auth.php", query: ["a": "delete_account"],
+                          method: "POST", form: ["password": password])
         return try await send(req, GenericResponse.self)
     }
 
@@ -376,6 +403,23 @@ struct SearchResponse: Decodable {
     let success: Bool?
     let query: String?
     let tracks: [Track]
+    let artists: [SearchArtist]?
+}
+
+struct SearchArtist: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let slug: String?
+    let image: String?
+    let popularity: Int?
+    let followers: Int64?
+
+    /// URL absoluta de la imagen (prepend host si era relativa).
+    var displayImage: String? {
+        guard let raw = image, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("http") { return raw }
+        return "https://temazo.es" + (raw.hasPrefix("/") ? raw : "/" + raw)
+    }
 }
 
 struct SessionResponse: Decodable {
@@ -417,6 +461,59 @@ struct PlaylistsResponse: Decodable {
 
 struct PlaylistTracksResponse: Decodable {
     let tracks: [Track]
+}
+
+struct PublicPlaylist: Decodable, Identifiable, Hashable {
+    let id: Int64
+    let name: String
+    let slug: String?
+    let description: String?
+    let ownerId: Int64?
+    let ownerUsername: String?
+    let ownerAvatar: String?
+    let trackCount: Int
+    let followers: Int
+    let previewCover: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, slug, description, followers
+        case ownerId = "owner_id"
+        case ownerUsername = "owner_username"
+        case ownerAvatar = "owner_avatar"
+        case trackCount = "track_count"
+        case previewCover = "preview_cover"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // id puede venir como Int o String
+        if let i = try? c.decode(Int64.self, forKey: .id) { id = i }
+        else if let s = try? c.decode(String.self, forKey: .id), let i = Int64(s) { id = i }
+        else { id = 0 }
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        slug = try? c.decode(String.self, forKey: .slug)
+        description = try? c.decode(String.self, forKey: .description)
+        ownerId = (try? c.decode(Int64.self, forKey: .ownerId))
+            ?? (try? c.decode(String.self, forKey: .ownerId)).flatMap { Int64($0) }
+        ownerUsername = try? c.decode(String.self, forKey: .ownerUsername)
+        ownerAvatar = try? c.decode(String.self, forKey: .ownerAvatar)
+        trackCount = (try? c.decode(Int.self, forKey: .trackCount))
+            ?? (try? c.decode(String.self, forKey: .trackCount)).flatMap { Int($0) } ?? 0
+        followers = (try? c.decode(Int.self, forKey: .followers))
+            ?? (try? c.decode(String.self, forKey: .followers)).flatMap { Int($0) } ?? 0
+        previewCover = try? c.decode(String.self, forKey: .previewCover)
+    }
+
+    /// URL absoluta de la portada (prepend host si era relativa).
+    var displayCover: String? {
+        guard let raw = previewCover, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("http") { return raw }
+        return "https://temazo.es" + (raw.hasPrefix("/") ? raw : "/" + raw)
+    }
+}
+
+struct DiscoverPlaylistsResponse: Decodable {
+    let playlists: [PublicPlaylist]
 }
 
 struct GenericResponse: Decodable {

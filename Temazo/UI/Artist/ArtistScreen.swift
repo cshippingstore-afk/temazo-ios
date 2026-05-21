@@ -29,13 +29,6 @@ struct ArtistScreen: View {
                 VStack(spacing: 0) {
                     Spacer().frame(height: 56) // espacio bajo TopBar
                     headerView
-                    if let bio = artist?.bio, !bio.isEmpty {
-                        Text(bio)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.white.opacity(0.75))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                    }
                     if !albums.isEmpty {
                         sectionTitle("📀 Álbumes")
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -55,7 +48,17 @@ struct ArtistScreen: View {
                             }
                         }
                     }
-                    Spacer().frame(height: 30)
+                    // Bio al final del scroll (sin duplicar foto+nombre arriba)
+                    if let bio = artist?.bio, !bio.isEmpty {
+                        sectionTitle("ℹ Sobre \(artist?.name ?? displayName)")
+                        Text(bio)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.white.opacity(0.75))
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Spacer().frame(height: 40)
                 }
             }
             // TopBar simple (back + título + spinner)
@@ -82,73 +85,71 @@ struct ArtistScreen: View {
     }
 
     private var headerView: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                if let url = artist.flatMap({ $0.image ?? $0.imageLarge }), let u = makeURL(url) {
-                    AsyncImage(url: u) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().scaledToFill()
-                        default:
-                            Color.white.opacity(0.05)
-                        }
+        HStack(alignment: .center, spacing: 16) {
+            // Foto a la izquierda — 130dp circular (igual que Android v1.52+)
+            let photoSize: CGFloat = 130
+            if let url = artist.flatMap({ $0.image ?? $0.imageLarge }), let u = makeURL(url) {
+                AsyncImage(url: u) { phase in
+                    switch phase {
+                    case .success(let img): img.resizable().scaledToFill()
+                    default: Color.white.opacity(0.05)
                     }
-                    .frame(width: 180, height: 180)
-                    .clipShape(Circle())
-                } else {
-                    Circle()
-                        .fill(Color.white.opacity(0.08))
-                        .frame(width: 180, height: 180)
-                        .overlay(
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 60))
-                                .foregroundStyle(Color.white.opacity(0.6))
-                        )
                 }
-            }
-            Text(artist?.name ?? displayName)
-                .font(.system(size: 24, weight: .bold))
-                .foregroundStyle(Color.white)
-            if let f = artist?.followers, f > 0 {
-                Text("\(formatFollowers(f)) seguidores")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.white.opacity(0.55))
-            }
-            if let g = artist?.genres, !g.isEmpty {
-                Text(g.joined(separator: " · "))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.neonPink.opacity(0.85))
-            }
-            if artist?.id != nil {
-                Button(action: toggleFollow) {
-                    HStack(spacing: 6) {
-                        if following {
-                            Text("✓ Siguiendo")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(Color.neonPink)
-                        } else {
-                            Text("Seguir")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(Color.white)
-                        }
-                    }
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 10)
-                    .background(
-                        following
-                        ? AnyView(Color.clear)
-                        : AnyView(Color.neonPink)
-                    )
+                .frame(width: photoSize, height: photoSize)
+                .clipShape(Circle())
+            } else {
+                Circle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: photoSize, height: photoSize)
                     .overlay(
-                        Capsule().stroke(Color.neonPink, lineWidth: following ? 1 : 0)
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 50))
+                            .foregroundStyle(Color.white.opacity(0.6))
                     )
-                    .clipShape(Capsule())
-                }
-                .disabled(togglingFollow)
             }
+
+            // Columna derecha: nombre + seguidores + género + botón follow
+            VStack(alignment: .leading, spacing: 4) {
+                Text(artist?.name ?? displayName)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
+                if let f = artist?.followers, f > 0 {
+                    Text("\(formatFollowers(f)) seguidores")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                }
+                if let g = artist?.genres, !g.isEmpty {
+                    Text(g.prefix(3).joined(separator: " · "))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.neonPink.opacity(0.85))
+                        .lineLimit(1)
+                }
+                if artist?.id != nil {
+                    Spacer().frame(height: 4)
+                    Button(action: toggleFollow) {
+                        HStack(spacing: 4) {
+                            if following {
+                                Text("✓ Siguiendo")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.neonPink)
+                            } else {
+                                Text("Seguir")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.white)
+                            }
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 6)
+                        .background(following ? AnyView(Color.clear) : AnyView(Color.neonPink))
+                        .overlay(Capsule().stroke(Color.neonPink, lineWidth: following ? 1 : 0))
+                        .clipShape(Capsule())
+                    }
+                    .disabled(togglingFollow)
+                }
+            }
+            Spacer()
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
     private func sectionTitle(_ s: String) -> some View {

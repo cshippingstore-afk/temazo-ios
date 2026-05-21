@@ -1,29 +1,33 @@
 import SwiftUI
 
-/// MiniPlayer — réplica del Android.
-/// - Tap en cover → álbum (si tiene album_id)
-/// - Tap en artista → perfil del artista (si tiene artist_id/slug)
-/// - Tap en título → expand FullPlayer
-/// - Swipe up sobre la fila superior → expand FullPlayer
-/// - Botones playlist apilados verticalmente: arriba "+" añadir, abajo "▶" cargar
+/// MiniPlayer rediseñado (igual que Android v1.48+):
+/// - Sin botones skip prev/next ni slider (gestos lo hacen)
+/// - Botón play/pause con anillo circular de progreso
+/// - Botón corazón a la izquierda del play
+/// - Todo el row clickable → expandir
+/// - Swipe ↑ expand · Swipe ←/→ next/prev
 struct MiniPlayer: View {
     let onExpand: () -> Void
     let onCoverClick: () -> Void
     let onArtistClick: () -> Void
     let onAddToPlaylist: () -> Void
-    let onLoadPlaylist: () -> Void
+    let onLoadPlaylist: () -> Void   // no usado en UI (compat), gestionado por la pestaña Playlists
 
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
-    @State private var seekValue: Double = 0
-    @State private var isSeeking = false
-    @State private var dragAccum: CGFloat = 0
+    @State private var dragV: CGFloat = 0
+    @State private var dragH: CGFloat = 0
 
     var body: some View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
+        let isFav = favorites.contains(t.id)
+        let progress: Double = {
+            let dur = max(Double(player.state.durationSec), 1)
+            return min(max(Double(player.state.positionSec) / dur, 0), 1)
+        }()
+
         return AnyView(
             VStack(spacing: 0) {
-                // Borde superior con glow rosa para separar del contenido
                 LinearGradient(
                     colors: [Color.neonPink.opacity(0.55), Color.neonPurple.opacity(0.35), Color.neonPink.opacity(0.55)],
                     startPoint: .leading, endPoint: .trailing
@@ -31,36 +35,89 @@ struct MiniPlayer: View {
                 .frame(height: 1)
                 .shadow(color: Color.neonPink.opacity(0.6), radius: 4, y: -1)
 
-                topRow(t)
+                HStack(spacing: 8) {
+                    CoverImage(url: t.coverUrl, size: 48, cornerRadius: 6)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.neonPink.opacity(0.4), lineWidth: 1))
+                        .shadow(color: Color.neonPink.opacity(0.3), radius: 6)
 
-                // Slider con glow neón
-                NeonSlider(
-                    value: Binding(
-                        get: { isSeeking ? seekValue : Double(player.state.positionSec) },
-                        set: { seekValue = $0 }
-                    ),
-                    bounds: 0...Double(max(player.state.durationSec, 1)),
-                    onEditingChanged: { editing in
-                        if editing { isSeeking = true }
-                        else { player.seekTo(seconds: Float(seekValue)); isSeeking = false }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(t.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white).lineLimit(1)
+                        Text(t.artistName ?? "")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.textLow).lineLimit(1)
                     }
-                )
-                .frame(height: 16)
-                .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Tiempos sutiles bajo el slider — aprovecha el espacio
-                HStack {
-                    Text(format(isSeeking ? Float(seekValue) : player.state.positionSec))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.55))
-                    Spacer()
-                    Text(format(player.state.durationSec))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.55))
+                    // Añadir a playlist
+                    Button(action: onAddToPlaylist) {
+                        Image(systemName: "plus.rectangle.on.rectangle")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Color.white.opacity(0.85))
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer().frame(width: 2)
+
+                    // Corazón (Me gusta)
+                    Button(action: {
+                        FavToggle.toggle(trackId: t.id, favRepo: favorites)
+                    }) {
+                        Image(systemName: isFav ? "heart.fill" : "heart")
+                            .font(.system(size: 18))
+                            .foregroundStyle(isFav ? Color.neonPink : Color.white.opacity(0.85))
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer().frame(width: 8)
+
+                    // Play/Pause con anillo circular de progreso
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.15), lineWidth: 2)
+                            .frame(width: 44, height: 44)
+                        Circle()
+                            .trim(from: 0, to: progress)
+                            .stroke(Color.neonPink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 44, height: 44)
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 0.5), value: progress)
+                        Button(action: { player.togglePlay() }) {
+                            Image(systemName: player.state.isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 22))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 2)
-                .padding(.bottom, 6)
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .contentShape(Rectangle())
+                .onTapGesture { onExpand() }
+                // Gestos: swipe vertical hacia arriba expande, swipe horizontal cambia canción.
+                .gesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { val in
+                            dragV = val.translation.height
+                            dragH = val.translation.width
+                        }
+                        .onEnded { val in
+                            let dx = val.translation.width
+                            let dy = val.translation.height
+                            if abs(dy) > abs(dx) {
+                                // vertical
+                                if dy < -80 { onExpand() }
+                            } else {
+                                // horizontal
+                                if dx < -120 { player.next() }
+                                else if dx > 120 { player.prev() }
+                            }
+                            dragV = 0; dragH = 0
+                        }
+                )
             }
             .background(
                 ZStack {
@@ -75,90 +132,6 @@ struct MiniPlayer: View {
                     )
                 }
             )
-        )
-    }
-
-    private func format(_ s: Float) -> String {
-        guard s.isFinite, s >= 0 else { return "0:00" }
-        let total = Int(s)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-
-    @ViewBuilder
-    private func topRow(_ t: Track) -> some View {
-        HStack(spacing: 10) {
-            CoverImage(url: t.coverUrl, size: 44, cornerRadius: 6)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.neonPink.opacity(0.4), lineWidth: 1)
-                )
-                .shadow(color: Color.neonPink.opacity(0.3), radius: 6)
-                .onTapGesture {
-                    if t.albumId != nil || (t.albumSlug?.isEmpty == false) {
-                        onCoverClick()
-                    } else {
-                        onExpand()
-                    }
-                }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(t.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white).lineLimit(1)
-                    .onTapGesture { onExpand() }
-                Text(t.artistName ?? "")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.textLow).lineLimit(1)
-                    .onTapGesture {
-                        if t.artistId != nil || (t.artistSlug?.isEmpty == false) {
-                            onArtistClick()
-                        }
-                    }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Dos botones playlist apilados (mismo ancho que un IconButton)
-            VStack(spacing: 0) {
-                Button { onAddToPlaylist() } label: {
-                    Image(systemName: "plus.rectangle.on.rectangle")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .frame(width: 32, height: 24)
-                }
-                Button { onLoadPlaylist() } label: {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .frame(width: 32, height: 24)
-                }
-            }
-
-            Button { player.prev() } label: {
-                Image(systemName: "backward.fill").font(.system(size: 18))
-                    .foregroundStyle(Color.textMid)
-            }
-            Button { player.togglePlay() } label: {
-                Image(systemName: player.state.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 22)).foregroundStyle(.white)
-                    .padding(8).background(Circle().fill(Color.neonPink))
-                    .shadow(color: Color.neonPink.opacity(0.6), radius: 8)
-            }
-            Button { player.next() } label: {
-                Image(systemName: "forward.fill").font(.system(size: 18))
-                    .foregroundStyle(Color.textMid)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 8, coordinateSpace: .local)
-                .onChanged { val in
-                    dragAccum = val.translation.height
-                }
-                .onEnded { val in
-                    if val.translation.height < -80 { onExpand() }
-                    dragAccum = 0
-                }
         )
     }
 }

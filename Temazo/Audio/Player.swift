@@ -54,6 +54,12 @@ final class Player: NSObject, ObservableObject {
         AudioSessionManager.shared.stopSilentLoop()
     }
 
+    /// Añade un track al final de la cola actual sin interrumpir reproducción.
+    func addToQueue(_ track: Track) {
+        if state.queue.contains(where: { $0.id == track.id }) { return }
+        state.queue.append(track)
+    }
+
     func next() {
         guard !state.queue.isEmpty else { return }
         let nextIdx = (state.index + 1) % state.queue.count

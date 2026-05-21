@@ -19,39 +19,63 @@ struct FullPlayer: View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
         let isFav = favorites.contains(t.id)
         return AnyView(
-            ZStack {
-                LinearGradient(colors: [Color(hex: 0x1a0a2e), Color(hex: 0x0a0a1a)],
-                               startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
+            GeometryReader { geo in
+                ZStack {
+                    LinearGradient(colors: [Color(hex: 0x1a0a2e), Color(hex: 0x0a0a1a)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .ignoresSafeArea()
 
-                VStack(spacing: 14) {
-                    topBar(closeAction: onClose)
+                    VStack(spacing: 14) {
+                        topBar(closeAction: onClose)
 
-                    if showLyrics {
-                        LyricsView(lines: lyrics, posSec: player.state.positionSec) { sec in
-                            player.seekTo(seconds: sec)
+                        if showLyrics {
+                            LyricsView(lines: lyrics, posSec: player.state.positionSec) { sec in
+                                player.seekTo(seconds: sec)
+                            }
+                            .frame(maxHeight: .infinity)
+                            .padding(.horizontal, 18)
+                        } else {
+                            Spacer(minLength: 4)
+                            cover(track: t)
+                            Spacer(minLength: 4)
                         }
-                        .frame(maxHeight: .infinity)
-                        .padding(.horizontal, 18)
-                    } else {
-                        Spacer(minLength: 4)
-                        cover(track: t)
-                        Spacer(minLength: 4)
+
+                        titleBlock(track: t)
+
+                        progressBar()
+                            .padding(.horizontal, 18)
+
+                        transportRow()
+                            .padding(.vertical, 8)
+
+                        bottomActions(isFav: isFav, trackId: t.id)
+                            .padding(.bottom, 24)
                     }
-
-                    titleBlock(track: t)
-
-                    progressBar()
-                        .padding(.horizontal, 18)
-
-                    transportRow()
-                        .padding(.vertical, 8)
-
-                    bottomActions(isFav: isFav, trackId: t.id)
-                        .padding(.bottom, 24)
                 }
+                // Gestos Spotify:
+                //  - Swipe ↓ cierra FullPlayer
+                //  - Swipe ←/→ (en el 75% superior) siguiente/anterior canción
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 12)
+                        .onEnded { val in
+                            let dx = val.translation.width
+                            let dy = val.translation.height
+                            let startY = val.startLocation.y
+                            // Vertical down — siempre cierra
+                            if abs(dy) > abs(dx), dy > 140 {
+                                onClose()
+                                return
+                            }
+                            // Horizontal — solo si empieza por encima del 75% (no choca con controles)
+                            if abs(dx) > abs(dy), startY < geo.size.height * 0.75 {
+                                if dx < -120 { player.next() }
+                                else if dx > 120 { player.prev() }
+                            }
+                        }
+                )
+                .task(id: t.id) { await loadLyrics(trackId: t.id) }
             }
-            .task(id: t.id) { await loadLyrics(trackId: t.id) }
         )
     }
 

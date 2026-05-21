@@ -33,27 +33,12 @@ struct AccountScreen: View {
     @State private var uploadingAvatar = false
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Group {
-                if auth.currentUser != nil {
-                    profilePanel
-                } else {
-                    LoginPanel(onRegister: { showRegister = true })
-                }
-            }
-            // FAB crear playlist (solo logueado)
+        // FAB crear playlist eliminado — la creación vive en la pestaña Playlists.
+        Group {
             if auth.currentUser != nil {
-                Button { showCreatePlaylist = true } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 54, height: 54)
-                        .background(Color.neonPink)
-                        .clipShape(Circle())
-                        .shadow(color: Color.neonPink.opacity(0.5), radius: 8, y: 4)
-                }
-                .padding(.bottom, 20)
-                .padding(.trailing, 18)
+                profilePanel
+            } else {
+                LoginPanel(onRegister: { showRegister = true })
             }
         }
         .fullScreenCover(isPresented: $showRegister) {
@@ -118,19 +103,7 @@ struct AccountScreen: View {
                 accessCards
                 Spacer().frame(height: 12)
                 actionButtons
-                Divider().background(Color.white.opacity(0.06)).padding(.vertical, 12)
-                playlistsHeader
-                if playlists.isEmpty {
-                    Text("Aún no tienes playlists")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.white.opacity(0.5))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 32)
-                } else {
-                    ForEach(playlists) { p in
-                        playlistRow(p)
-                    }
-                }
+                // Listado de playlists eliminado — vive en la pestaña Playlists del bottom nav.
                 Spacer().frame(height: 80)
             }
         }
@@ -207,8 +180,8 @@ struct AccountScreen: View {
     }
 
     private var accessCards: some View {
+        // Favoritos quitado — vive en la pestaña Playlists del bottom nav.
         HStack(spacing: 8) {
-            accessCard(emoji: "❤", title: "Favoritos", count: counts.favs, action: onFavoritesClick)
             accessCard(emoji: "👥", title: "Siguiendo", count: counts.follows, action: onFollowingClick)
             accessCard(emoji: "📜", title: "Historial", count: counts.history, action: onHistoryClick)
         }
@@ -230,29 +203,15 @@ struct AccountScreen: View {
     }
 
     private var actionButtons: some View {
-        HStack(spacing: 12) {
-            Button { showSettings = true } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape").font(.system(size: 14))
-                    Text("Ajustes").font(.system(size: 12))
-                }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.4), lineWidth: 1)
-                )
-                .foregroundStyle(.white)
+        // "Salir" se ha movido dentro de SettingsScreen junto con cambiar contraseña, eliminar cuenta y legales.
+        Button { showSettings = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "gearshape").font(.system(size: 14))
+                Text("Ajustes y opciones").font(.system(size: 13))
             }
-            Button { Task { await auth.logout(); profile = nil; counts = ProfileCounts(); playlists = [] } } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right").font(.system(size: 14))
-                    Text("Salir").font(.system(size: 12))
-                }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.4), lineWidth: 1)
-                )
-                .foregroundStyle(.white)
-            }
+            .padding(.horizontal, 18).padding(.vertical, 8)
+            .background(Color.neonPink, in: Capsule())
+            .foregroundStyle(.white)
         }
     }
 

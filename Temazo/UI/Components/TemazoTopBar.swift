@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// TopBar — réplica del Android: logo izquierda · ecualizador · bandera · 3 tabs derecha.
-/// La nav inferior se elimina; los tabs viven aquí arriba.
+/// TopBar — réplica del Android v1.54+: logo izquierda · ecualizador · avatar derecha.
+/// Los tabs viven ahora en la bottom NavigationBar (no aquí).
 struct TemazoTopBar: View {
     let isPlaying: Bool
-    let currentTab: AppTab
-    let onTabSelected: (AppTab) -> Void
+    var onAvatarClick: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 8) {
@@ -14,27 +13,21 @@ struct TemazoTopBar: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(height: 40)
             EqualizerBars(isActive: isPlaying)
-            // Bandera del país detectado por Locale
-            if let flag = countryFlagFromLocale() {
-                Text(flag).font(.system(size: 22))
-            }
             Spacer()
-            HStack(spacing: 2) {
-                ForEach(AppTab.all, id: \.self) { tab in
-                    Button { onTabSelected(tab) } label: {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(currentTab == tab ? Color.neonPink : Color.white.opacity(0.55))
-                            .frame(width: 40, height: 40)
-                            .background(
-                                currentTab == tab
-                                ? Color.neonPink.opacity(0.18)
-                                : Color.clear
-                            )
-                            .clipShape(Circle())
-                    }
+            // Avatar — abre AccountScreen como detail
+            Button(action: onAvatarClick) {
+                ZStack {
+                    Circle()
+                        .fill(Color.neonPink.opacity(0.18))
+                    Circle()
+                        .stroke(Color.neonPink.opacity(0.5), lineWidth: 1)
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.neonPink)
                 }
+                .frame(width: 40, height: 40)
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -42,38 +35,26 @@ struct TemazoTopBar: View {
     }
 }
 
-extension AppTab {
-    static let all: [AppTab] = [.home, .search, .account]
+/// AppTab — 4 valores, igual que Android.
+enum AppTab: Int, Hashable, CaseIterable {
+    case home, top, search, playlists
+
     var icon: String {
         switch self {
         case .home: return "house.fill"
+        case .top: return "chart.line.uptrend.xyaxis"
         case .search: return "magnifyingglass"
-        case .account: return "person.crop.circle.fill"
+        case .playlists: return "music.note.list"
         }
     }
     var label: String {
         switch self {
         case .home: return "Inicio"
+        case .top: return "Top"
         case .search: return "Buscar"
-        case .account: return "Mi cuenta"
+        case .playlists: return "Playlists"
         }
     }
-}
-
-/// Convierte el código ISO del país del Locale (ES, MX, …) a emoji bandera.
-func countryFlagFromLocale() -> String? {
-    let cc: String = {
-        if #available(iOS 16, *) {
-            return Locale.current.region?.identifier ?? Locale.current.regionCode ?? ""
-        } else {
-            return Locale.current.regionCode ?? ""
-        }
-    }().uppercased()
-    guard cc.count == 2, cc.allSatisfy({ $0.isLetter }) else { return nil }
-    return cc.unicodeScalars.compactMap { c -> String? in
-        guard let s = UnicodeScalar(0x1F1E6 + Int(c.value) - Int(("A" as Unicode.Scalar).value)) else { return nil }
-        return String(s)
-    }.joined()
 }
 
 private struct EqualizerBars: View {

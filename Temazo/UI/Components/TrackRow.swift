@@ -10,8 +10,27 @@ struct TrackRow: View {
     @EnvironmentObject var favorites: FavoritesRepo
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 10) {
+        rowContent
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+            // Long-press → abrir TrackOptionsSheet via bus global
+            .onLongPressGesture(minimumDuration: 0.4) {
+                TrackOptionsBus.shared.show(track)
+            }
+            // Swipe ← toggle Me gusta
+            .gesture(
+                DragGesture(minimumDistance: 30)
+                    .onEnded { v in
+                        if v.translation.width < -120 && abs(v.translation.height) < 40 {
+                            FavToggle.toggle(trackId: track.id, favRepo: favorites)
+                        }
+                    }
+            )
+    }
+
+    @ViewBuilder
+    private var rowContent: some View {
+        HStack(spacing: 10) {
                 if let r = rank {
                     Text("\(r)")
                         .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -62,8 +81,6 @@ struct TrackRow: View {
                     )
             )
             .shadow(color: isCurrent ? Color.neonPink.opacity(0.3) : Color.clear, radius: 10)
-        }
-        .buttonStyle(.plain)
     }
 
     private func rankColor(_ r: Int) -> Color {

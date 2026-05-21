@@ -14,25 +14,35 @@ final class HomeViewModel: ObservableObject {
     @Published var lastUpdateMin: Int? = nil
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
+    @Published var country: String = HomeViewModel.loadStoredCountry()
 
-    private var cache: [String: [Track]] = [:]
+    private var cache: [String: [Track]] = [:]   // key = "country_genre"
 
-    /// País del usuario para sincronizar el top con el de la web.
-    /// Locale del dispositivo. Si no es hispano (los 21 oficiales) → fallback a ES.
-    private let userCountry: String = {
-        let cc: String = {
+    static let supportedCountries: [String] = [
+        "ES","MX","AR","CO","PE","VE","CL","EC","GT","CU","BO","DO",
+        "HN","PY","SV","NI","CR","PA","UY","PR","GQ"
+    ]
+
+    private static func loadStoredCountry() -> String {
+        let stored = UserDefaults.standard.string(forKey: "temazo_country") ?? ""
+        if supportedCountries.contains(stored) { return stored }
+        let locale: String = {
             if #available(iOS 16, *) {
                 return Locale.current.region?.identifier ?? Locale.current.regionCode ?? ""
             } else {
                 return Locale.current.regionCode ?? ""
             }
         }().uppercased()
-        let supported: Set<String> = [
-            "ES","MX","AR","CO","PE","VE","CL","EC","GT","CU","BO","DO",
-            "HN","PY","SV","NI","CR","PA","UY","PR","GQ"
-        ]
-        return supported.contains(cc) ? cc : "ES"
-    }()
+        return supportedCountries.contains(locale) ? locale : "ES"
+    }
+
+    func setCountry(_ cc: String) {
+        let safe = HomeViewModel.supportedCountries.contains(cc) ? cc : "ES"
+        if country == safe { return }
+        country = safe
+        UserDefaults.standard.set(safe, forKey: "temazo_country")
+        Task { await loadTrending(selectedGenre, force: true) }
+    }
 
     let genres: [GenreItem] = [
         .init(id: "reggaeton", name: "Reggaetón", emoji: "🔥"),
@@ -65,9 +75,9 @@ final class HomeViewModel: ObservableObject {
 
     func loadTrending(_ genre: String, force: Bool = false) async {
         selectedGenre = genre
-        if let cached = cache[genre], !force {
+        let key = "\(country)_\(genre)"
+        if let cached = cache[key], !force {
             tracks = cached
-            // refresh silencioso
             await silentRefresh(genre)
             return
         }
@@ -77,20 +87,18 @@ final class HomeViewModel: ObservableObject {
     }
 
     func forceRefresh() async {
+        cache.removeValue(forKey: "\(country)_\(selectedGenre)")
         await silentRefresh(selectedGenre)
     }
 
     private func silentRefresh(_ genre: String) async {
         do {
-            let resp = try await TemazoAPI.shared.trendingByGenre(genre, limit: 50, country: userCountry)
+            let resp = try await TemazoAPI.shared.trendingByGenre(genre, limit: 50, country: country)
             let valid = resp.tracks.filter { $0.youtubeId != nil && !($0.youtubeId ?? "").isEmpty }
             tracks = valid
-            cache[genre] = valid
+            cache["\(country)_\(genre)"] = valid
             lastUpdateMin = resp.lastUpdateMin
             error = nil
-            // Pre-resolve YouTube backend cache para los primeros 20 (con iframe oficial
-            // el iframe los carga vía CDN de YouTube directamente, esto solo "calienta"
-            // el cache de yt_proxy.php en el VPS por si en el futuro se reactiva)
             TemazoAPI.shared.prefetchYouTubeURLs(valid.prefix(20).compactMap { $0.youtubeId })
         } catch {
             self.error = error.localizedDescription
