@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // (importante: si esto se hace en .task de SwiftUI, hay race con play)
         AudioSessionManager.shared.configure()
 
+        // Cache de imágenes 50MB RAM + 200MB disco — reduce flickering en scrolls.
+        ImageCacheSetup.configureOnce()
+
         // Recibir remote control events (lock screen / BT)
         application.beginReceivingRemoteControlEvents()
 

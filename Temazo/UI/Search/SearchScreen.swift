@@ -3,10 +3,12 @@ import SwiftUI
 struct SearchScreen: View {
     let onTrackClick: (Track, [Track], Int) -> Void
     var onArtistClick: (Int64?, String?, String?) -> Void = { _, _, _ in }
+    var onUserClick: (Int64, String?) -> Void = { _, _ in }
 
     @State private var query: String = ""
     @State private var tracks: [Track] = []
     @State private var artists: [SearchArtist] = []
+    @State private var users: [PublicUserBrief] = []
     @State private var isLoading: Bool = false
     @State private var searchTask: Task<Void, Never>? = nil
     @FocusState private var focused: Bool
@@ -26,7 +28,7 @@ struct SearchScreen: View {
                         scheduleSearch(newValue)
                     }
                 if !query.isEmpty {
-                    Button { query = ""; tracks = []; artists = [] } label: {
+                    Button { query = ""; tracks = []; artists = []; users = [] } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.textLow).font(.system(size: 16))
                     }
@@ -43,13 +45,13 @@ struct SearchScreen: View {
 
             if query.isEmpty {
                 historyView
-            } else if isLoading && tracks.isEmpty && artists.isEmpty {
+            } else if isLoading && tracks.isEmpty && artists.isEmpty && users.isEmpty {
                 ProgressView().tint(.neonPink).padding(.top, 40); Spacer()
             } else if query.count < 2 {
                 Spacer()
                 Text("Escribe al menos 2 letras").foregroundStyle(.textLow).font(.system(size: 13))
                 Spacer()
-            } else if tracks.isEmpty && artists.isEmpty {
+            } else if tracks.isEmpty && artists.isEmpty && users.isEmpty {
                 Spacer()
                 Text("Sin resultados para \"\(query)\"").foregroundStyle(.textLow).font(.system(size: 13))
                 Spacer()
@@ -60,6 +62,13 @@ struct SearchScreen: View {
                             sectionTitle("Artistas")
                             ForEach(artists) { a in
                                 artistRow(a)
+                            }
+                            Spacer().frame(height: 8)
+                        }
+                        if !users.isEmpty {
+                            sectionTitle("Usuarios")
+                            ForEach(users) { u in
+                                userRow(u)
                             }
                             Spacer().frame(height: 8)
                         }
@@ -85,10 +94,10 @@ struct SearchScreen: View {
         }
         .onAppear { focused = true }
         .onDisappear {
-            // Al salir de Search, limpiar query/resultados (al volver: campo limpio)
             query = ""
             tracks = []
             artists = []
+            users = []
         }
     }
 
@@ -98,6 +107,33 @@ struct SearchScreen: View {
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(Color.white.opacity(0.7))
             .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
+    }
+
+    @ViewBuilder
+    private func userRow(_ u: PublicUserBrief) -> some View {
+        Button {
+            history.add(query)
+            focused = false
+            onUserClick(u.id, u.username)
+        } label: {
+            HStack(spacing: 12) {
+                AsyncImage(url: URL(string: u.displayAvatar ?? "")) { phase in
+                    if let img = phase.image { img.resizable().aspectRatio(contentMode: .fill) }
+                    else { Color.bgSurfaceHi }
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(u.username.map { "@\($0)" } ?? "@usuario")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Usuario").font(.system(size: 11)).foregroundStyle(Color.textLow)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -187,7 +223,7 @@ struct SearchScreen: View {
         searchTask?.cancel()
         let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else {
-            tracks = []; artists = []
+            tracks = []; artists = []; users = []
             return
         }
         searchTask = Task {
@@ -195,8 +231,10 @@ struct SearchScreen: View {
             if Task.isCancelled { return }
             isLoading = true
             defer { isLoading = false }
+            async let trackResp = TemazoAPI.shared.search(trimmed, limit: 20)
+            async let userResp = TemazoAPI.shared.userSearch(trimmed, limit: 8)
             do {
-                let resp = try await TemazoAPI.shared.search(trimmed, limit: 20)
+                let resp = try await trackResp
                 if !Task.isCancelled {
                     let validTracks = resp.tracks.filter { !($0.youtubeId ?? "").isEmpty }
                     tracks = validTracks
@@ -205,6 +243,9 @@ struct SearchScreen: View {
                 }
             } catch {
                 if !Task.isCancelled { tracks = []; artists = [] }
+            }
+            if let ur = try? await userResp, !Task.isCancelled {
+                users = ur.users
             }
         }
     }

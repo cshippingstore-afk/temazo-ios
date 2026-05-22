@@ -7,11 +7,13 @@ struct PlaylistsScreen: View {
     var onPlaylistClick: (Playlist) -> Void = { _ in }
 
     @State private var playlists: [Playlist] = []
+    @State private var followedPlaylists: [PublicPlaylist] = []
     @State private var loading: Bool = true
     @State private var showCreate: Bool = false
     @State private var renaming: Playlist? = nil
     @State private var deleting: Playlist? = nil
     @State private var toastText: String? = nil
+    var onPublicPlaylistClick: ((Int64) -> Void)? = nil
 
     @EnvironmentObject var auth: AuthRepository
 
@@ -132,6 +134,23 @@ struct PlaylistsScreen: View {
                         playlistRow(p)
                     }
                 }
+
+                if !followedPlaylists.isEmpty {
+                    Text("Playlists que sigues")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 8)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(followedPlaylists) { p in
+                                followedCard(p)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                }
+
                 Spacer().frame(height: 100)
             }
         }
@@ -204,6 +223,34 @@ struct PlaylistsScreen: View {
             let resp = try await TemazoAPI.shared.playlists()
             playlists = resp.playlists
         } catch {}
+        if let r = try? await TemazoAPI.shared.playlistsFollowing() {
+            followedPlaylists = r.playlists
+        }
+    }
+
+    private func followedCard(_ p: PublicPlaylist) -> some View {
+        Button { onPublicPlaylistClick?(p.id) } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                AsyncImage(url: URL(string: p.displayCover ?? "")) { phase in
+                    if let img = phase.image { img.resizable().aspectRatio(contentMode: .fill) }
+                    else { Color.bgSurfaceHi }
+                }
+                .frame(width: 130, height: 130)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                Text(p.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .frame(width: 130, alignment: .leading)
+                Text(p.ownerUsername.map { "@\($0)" } ?? "")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.textLow)
+                    .lineLimit(1)
+                    .frame(width: 130, alignment: .leading)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func createPlaylist(_ name: String) async {

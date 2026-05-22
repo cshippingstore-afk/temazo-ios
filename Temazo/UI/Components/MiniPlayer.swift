@@ -54,14 +54,15 @@ struct MiniPlayer: View {
                     .shadow(color: Color.neonPink.opacity(0.3), radius: 6)
 
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(t.title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white).lineLimit(1)
-                        Text(t.artistName ?? "")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.textLow).lineLimit(1)
+                        MarqueeText(text: t.title,
+                                    font: .system(size: 14, weight: .semibold),
+                                    color: .white, velocity: 30)
+                        MarqueeText(text: t.artistName ?? "",
+                                    font: .system(size: 12),
+                                    color: Color.textLow, velocity: 25)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 36)
 
                     // Añadir a playlist
                     Button(action: onAddToPlaylist) {

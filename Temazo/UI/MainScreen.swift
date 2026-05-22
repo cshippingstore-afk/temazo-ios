@@ -9,11 +9,13 @@ enum Detail: Hashable {
     case favorites
     case account
     case playlist(id: Int64, name: String?)
+    case publicPlaylist(id: Int64?, slug: String?)
     case notifications
     case userPublic(id: Int64?, username: String?)
     case usersFollowers(userId: Int64)
     case usersFollowing(userId: Int64)
     case userSearch
+    case recap
 }
 
 extension Notification.Name {
@@ -55,21 +57,30 @@ struct MainScreen: View {
                 ZStack {
                     if let last = detailStack.last {
                         detailView(for: last)
+                            .swipeBack { _ = detailStack.popLast() }
                     } else {
                         switch tab {
                         case .home:      InicioScreen(onTrackClick: onPlay,
-                                                     onPlaylistClick: { _ in /* TODO: vista pública */ })
+                                                     onPlaylistClick: { pid in
+                                                         detailStack.append(.publicPlaylist(id: pid, slug: nil))
+                                                     })
                         case .top:       HomeScreen(onTrackClick: onPlay)
                         case .search:    SearchScreen(
                             onTrackClick: onPlay,
                             onArtistClick: { id, slug, name in
                                 detailStack.append(.artist(id: id, slug: slug, name: name))
+                            },
+                            onUserClick: { id, username in
+                                detailStack.append(.userPublic(id: id, username: username))
                             }
                         )
                         case .playlists: PlaylistsScreen(
                             onAvatarClick: { detailStack.append(.account) },
                             onPlaylistClick: { p in
                                 detailStack.append(.playlist(id: p.id, name: p.name))
+                            },
+                            onPublicPlaylistClick: { pid in
+                                detailStack.append(.publicPlaylist(id: pid, slug: nil))
                             }
                         )
                         }
@@ -297,7 +308,13 @@ struct MainScreen: View {
                 onFavoritesClick: { detailStack.append(.favorites) },
                 onPlaylistClick: { p in
                     detailStack.append(.playlist(id: p.id, name: p.name))
-                }
+                },
+                onPublicProfileClick: {
+                    guard let me = auth.currentUser else { return }
+                    detailStack.append(.userPublic(id: me.id, username: nil))
+                },
+                onRecapClick: { detailStack.append(.recap) },
+                onNotificationsClick: { detailStack.append(.notifications) }
             )
         case .playlist(let id, let name):
             PlaylistDetailScreen(
@@ -312,8 +329,28 @@ struct MainScreen: View {
                 onOpenUser: { id, username in
                     detailStack.append(.userPublic(id: id, username: username))
                 },
-                onOpenTrack: { _ in /* TODO: abrir track */ }
+                onOpenTrack: { tid in
+                    // Carga track y reproduce
+                    Task {
+                        if let resp = try? await TemazoAPI.shared.artistTracks(id: nil, name: nil, exclude: nil, limit: 1) {
+                            if let t = resp.tracks.first(where: { $0.id == tid }) {
+                                onPlay(t, [t], 0)
+                            }
+                        }
+                    }
+                }
             )
+        case .publicPlaylist(let pid, let slug):
+            PublicPlaylistScreen(
+                playlistId: pid, slug: slug,
+                onBack: { _ = detailStack.popLast() },
+                onOpenOwner: { uid, uname in
+                    detailStack.append(.userPublic(id: uid, username: uname))
+                },
+                onPlay: onPlay
+            )
+        case .recap:
+            RecapScreen(onBack: { _ = detailStack.popLast() })
         case .userPublic(let id, let username):
             UserPublicScreen(
                 username: username, userId: id,

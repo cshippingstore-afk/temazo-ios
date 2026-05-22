@@ -5,7 +5,7 @@ import SwiftUI
 ///  - "Playlists de Temazo" (discover_playlists, público)
 struct InicioScreen: View {
     var onTrackClick: (Track, [Track], Int) -> Void
-    var onPlaylistClick: (PublicPlaylist) -> Void = { _ in }
+    var onPlaylistClick: (Int64) -> Void = { _ in }
 
     @StateObject private var vm = InicioViewModel()
     @EnvironmentObject var auth: AuthRepository
@@ -41,12 +41,55 @@ struct InicioScreen: View {
                     Spacer().frame(height: 20)
                 }
 
+                if !vm.releaseRadar.isEmpty {
+                    sectionTitle("📡 Release Radar — novedades para ti")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(vm.releaseRadar.enumerated()), id: \.element.id) { idx, t in
+                                TrackCard(track: t, rank: idx + 1,
+                                          isCurrent: player.state.currentTrack?.id == t.id,
+                                          isPlaying: player.state.currentTrack?.id == t.id && player.state.isPlaying,
+                                          onTap: { onTrackClick(t, vm.releaseRadar, idx) })
+                            }
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                    }
+                    Spacer().frame(height: 20)
+                }
+
+                if !vm.dailyMix.isEmpty {
+                    sectionTitle("🎯 Daily Mix")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(vm.dailyMix.enumerated()), id: \.element.id) { idx, t in
+                                TrackCard(track: t, rank: idx + 1,
+                                          isCurrent: player.state.currentTrack?.id == t.id,
+                                          isPlaying: player.state.currentTrack?.id == t.id && player.state.isPlaying,
+                                          onTap: { onTrackClick(t, vm.dailyMix, idx) })
+                            }
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                    }
+                    Spacer().frame(height: 20)
+                }
+
+                if !vm.friendActivity.isEmpty {
+                    sectionTitle("👥 Lo que escuchan tus amigos")
+                    VStack(spacing: 8) {
+                        ForEach(vm.friendActivity.prefix(8)) { ev in
+                            friendActivityRow(ev)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    Spacer().frame(height: 20)
+                }
+
                 if !vm.discoverPlaylists.isEmpty {
                     sectionTitle("🎧 Playlists de Temazo")
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             ForEach(vm.discoverPlaylists) { pl in
-                                PublicPlaylistCard(playlist: pl, onClick: { onPlaylistClick(pl) })
+                                PublicPlaylistCard(playlist: pl, onClick: { onPlaylistClick(pl.id) })
                             }
                         }
                         .padding(.horizontal, 12)
@@ -83,35 +126,96 @@ struct InicioScreen: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
     }
+
+    private func friendActivityRow(_ ev: FriendActivityEvent) -> some View {
+        HStack(spacing: 10) {
+            AsyncImage(url: URL(string: avatarURL(ev))) { phase in
+                if let img = phase.image { img.resizable().aspectRatio(contentMode: .fill) }
+                else { Color.bgSurfaceHi }
+            }
+            .frame(width: 32, height: 32)
+            .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(ev.username.map { "@\($0)" } ?? "Alguien")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text(activityText(ev.kind))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.textMid)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+    }
+
+    private func avatarURL(_ ev: FriendActivityEvent) -> String {
+        guard let raw = ev.avatar_url, !raw.isEmpty else { return "" }
+        if raw.hasPrefix("http") { return raw }
+        return "https://temazo.es" + (raw.hasPrefix("/") ? raw : "/\(raw)")
+    }
+
+    private func activityText(_ kind: String) -> String {
+        switch kind {
+        case "play": return "escuchó una canción"
+        case "follow_artist": return "sigue a un nuevo artista"
+        case "follow_user": return "sigue a un nuevo usuario"
+        case "playlist_create": return "creó una playlist"
+        case "playlist_follow": return "sigue una playlist"
+        case "fav": return "le gusta una canción"
+        default: return "interactuó"
+        }
+    }
 }
 
 @MainActor
 final class InicioViewModel: ObservableObject {
     @Published var followingFeed: [Track] = []
     @Published var discoverPlaylists: [PublicPlaylist] = []
+    @Published var releaseRadar: [Track] = []
+    @Published var dailyMix: [Track] = []
+    @Published var friendActivity: [FriendActivityEvent] = []
     @Published var loading: Bool = true
 
     func reload() async {
         async let feed = loadFeed()
         async let discover = loadDiscover()
-        _ = await (feed, discover)
+        async let radar = loadReleaseRadar()
+        async let mix = loadDailyMix()
+        async let activity = loadFriendActivity()
+        _ = await (feed, discover, radar, mix, activity)
         loading = false
     }
 
     private func loadFeed() async {
-        do {
-            let resp = try await TemazoAPI.shared.feedFollowing(limit: 20)
-            followingFeed = resp.tracks.filter { !($0.youtubeId ?? "").isEmpty }
-        } catch {
-            // Silencioso — si no logueado o sin red, queda vacío
+        if let r = try? await TemazoAPI.shared.feedFollowing(limit: 20) {
+            followingFeed = r.tracks.filter { !($0.youtubeId ?? "").isEmpty }
         }
     }
 
     private func loadDiscover() async {
-        do {
-            let resp = try await TemazoAPI.shared.discoverPlaylists(limit: 20)
-            discoverPlaylists = resp.playlists
-        } catch { }
+        if let r = try? await TemazoAPI.shared.discoverPlaylists(limit: 20) {
+            discoverPlaylists = r.playlists
+        }
+    }
+
+    private func loadReleaseRadar() async {
+        if let r = try? await TemazoAPI.shared.releaseRadar() {
+            releaseRadar = r.tracks.filter { !($0.youtubeId ?? "").isEmpty }
+        }
+    }
+
+    private func loadDailyMix() async {
+        if let r = try? await TemazoAPI.shared.dailyMix() {
+            dailyMix = r.tracks.filter { !($0.youtubeId ?? "").isEmpty }
+        }
+    }
+
+    private func loadFriendActivity() async {
+        if let r = try? await TemazoAPI.shared.friendActivity() {
+            friendActivity = r.activity
+        }
     }
 }
 

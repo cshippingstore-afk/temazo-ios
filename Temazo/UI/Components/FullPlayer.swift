@@ -14,6 +14,10 @@ struct FullPlayer: View {
     @State private var lyrics: [LyricLine] = []
     @State private var seekValue: Double = 0
     @State private var isSeeking = false
+    @State private var showQueue = false
+    @State private var showSleepTimer = false
+    @State private var showRecommend = false
+    @ObservedObject private var sleepTimer = SleepTimer.shared
 
     var body: some View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
@@ -132,10 +136,13 @@ struct FullPlayer: View {
 
     private func titleBlock(track: Track) -> some View {
         VStack(spacing: 4) {
-            Text(track.title).font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white).multilineTextAlignment(.center)
-                .lineLimit(2)
-            Text(track.artistName ?? "").font(.system(size: 14))
+            MarqueeText(text: track.title,
+                        font: .system(size: 22, weight: .bold),
+                        color: .white, velocity: 36)
+                .frame(height: 28)
+                .padding(.horizontal, 18)
+            Text(track.artistName ?? "")
+                .font(.system(size: 14))
                 .foregroundStyle(Color.textMid)
                 .onTapGesture {
                     if track.artistId != nil || (track.artistSlug?.isEmpty == false) {
@@ -172,7 +179,12 @@ struct FullPlayer: View {
     }
 
     private func transportRow() -> some View {
-        HStack(spacing: 30) {
+        HStack(spacing: 24) {
+            Button { player.toggleShuffle() } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(player.state.shuffle ? Color.neonPink : Color.textMid)
+            }
             Button { player.prev() } label: {
                 Image(systemName: "backward.fill").font(.system(size: 30))
                     .foregroundStyle(.white)
@@ -188,16 +200,21 @@ struct FullPlayer: View {
                 Image(systemName: "forward.fill").font(.system(size: 30))
                     .foregroundStyle(.white)
             }
+            Button { showQueue = true } label: {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.textMid)
+            }
         }
     }
 
     private func bottomActions(isFav: Bool, trackId: Int64) -> some View {
-        HStack(spacing: 20) {
+        HStack(spacing: 14) {
             Button {
                 FavToggle.toggle(trackId: trackId, favRepo: favorites)
             } label: {
                 Image(systemName: isFav ? "heart.fill" : "heart")
-                    .font(.system(size: 22))
+                    .font(.system(size: 20))
                     .foregroundStyle(isFav ? Color.neonPink : Color.textMid)
                     .padding(10)
                     .background(Circle().fill(Color.white.opacity(0.08)))
@@ -205,7 +222,7 @@ struct FullPlayer: View {
 
             Button { onAddToPlaylist() } label: {
                 Image(systemName: "plus.rectangle.on.rectangle")
-                    .font(.system(size: 22))
+                    .font(.system(size: 20))
                     .foregroundStyle(Color.textMid)
                     .padding(10)
                     .background(Circle().fill(Color.white.opacity(0.08)))
@@ -214,14 +231,57 @@ struct FullPlayer: View {
             Button { showLyrics.toggle() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "text.alignleft")
-                    Text("Letra").font(.system(size: 13, weight: .semibold))
+                    Text("Letra").font(.system(size: 12, weight: .semibold))
                 }
-                .padding(.horizontal, 14).padding(.vertical, 10)
+                .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(Capsule().fill(showLyrics ? Color.neonPink : Color.white.opacity(0.08)))
                 .foregroundStyle(.white)
                 .shadow(color: showLyrics ? Color.neonPink.opacity(0.5) : .clear, radius: 8)
             }
+
+            Button { showSleepTimer = true } label: {
+                Image(systemName: sleepTimer.isActive ? "moon.fill" : "moon")
+                    .font(.system(size: 20))
+                    .foregroundStyle(sleepTimer.isActive ? Color.neonCyan : Color.textMid)
+                    .padding(10)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+            }
+
+            Button { showRecommend = true } label: {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Color.textMid)
+                    .padding(10)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+            }
+
+            Button { shareCurrent() } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Color.textMid)
+                    .padding(10)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+            }
         }
+        .sheet(isPresented: $showQueue) {
+            QueueSheet(onClose: { showQueue = false })
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showSleepTimer) {
+            SleepTimerSheet(onClose: { showSleepTimer = false })
+                .presentationDetents([.fraction(0.45)])
+        }
+        .sheet(isPresented: $showRecommend) {
+            if let t = player.state.currentTrack {
+                RecommendTrackSheet(track: t, onClose: { showRecommend = false })
+                    .presentationDetents([.medium, .large])
+            }
+        }
+    }
+
+    private func shareCurrent() {
+        guard let t = player.state.currentTrack else { return }
+        TemazoShare.shareTrack(t)
     }
 
     private func loadLyrics(trackId: Int64) async {

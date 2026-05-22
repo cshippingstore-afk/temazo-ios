@@ -13,6 +13,9 @@ struct AccountScreen: View {
     let onFollowingClick: () -> Void
     let onFavoritesClick: () -> Void
     let onPlaylistClick: (Playlist) -> Void
+    var onPublicProfileClick: (() -> Void)? = nil
+    var onRecapClick: (() -> Void)? = nil
+    var onNotificationsClick: (() -> Void)? = nil
 
     @State private var showRegister = false
     @State private var showSettings = false
@@ -28,6 +31,10 @@ struct AccountScreen: View {
 
     @State private var showEditUsername = false
     @State private var usernameText = ""
+    @State private var showEditBio = false
+    @State private var bioText = ""
+    @State private var showPrivacy = false
+    @State private var privacy: UserPrivacy? = nil
 
     @State private var photoItem: PhotosPickerItem? = nil
     @State private var uploadingAvatar = false
@@ -99,9 +106,12 @@ struct AccountScreen: View {
                 Spacer().frame(height: 16)
                 avatarSection
                 usernameSection
-                Spacer().frame(height: 16)
+                bioSection
+                Spacer().frame(height: 14)
                 accessCards
                 Spacer().frame(height: 12)
+                socialActions
+                Spacer().frame(height: 10)
                 actionButtons
                 // Listado de playlists eliminado — vive en la pestaña Playlists del bottom nav.
                 Spacer().frame(height: 80)
@@ -213,6 +223,84 @@ struct AccountScreen: View {
             .background(Color.neonPink, in: Capsule())
             .foregroundStyle(.white)
         }
+    }
+
+    @ViewBuilder
+    private var bioSection: some View {
+        let bio = profile?.username.flatMap { _ in "" } ?? ""
+        VStack(spacing: 6) {
+            Button {
+                bioText = bio
+                showEditBio = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 11))
+                    Text(bio.isEmpty ? "Añadir bio" : "Editar bio")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+                .foregroundStyle(Color.white.opacity(0.85))
+            }
+        }
+        .alert("Tu bio", isPresented: $showEditBio) {
+            TextField("Cuéntale algo a tus seguidores", text: $bioText)
+            Button("Cancelar", role: .cancel) {}
+            Button("Guardar") { Task { await saveBio() } }
+        } message: {
+            Text("Máximo 500 caracteres")
+        }
+    }
+
+    private var socialActions: some View {
+        VStack(spacing: 8) {
+            actionRow(icon: "person.fill", label: "Ver mi perfil público") { onPublicProfileClick?() }
+            actionRow(icon: "chart.bar.fill", label: "Mi recap") { onRecapClick?() }
+            actionRow(icon: "bell.fill", label: "Notificaciones") { onNotificationsClick?() }
+            actionRow(icon: "lock.shield", label: "Privacidad") {
+                Task {
+                    if let r = try? await TemazoAPI.shared.userPrivacyGet() { privacy = r.privacy }
+                    showPrivacy = true
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .sheet(isPresented: $showPrivacy) {
+            PrivacySheet(current: privacy, onSave: { hideNP, hideH, pr in
+                Task {
+                    _ = try? await TemazoAPI.shared.userPrivacySet(
+                        hideNowPlaying: hideNP, hideHistory: hideH, privateSession: pr
+                    )
+                    showPrivacy = false
+                }
+            }, onClose: { showPrivacy = false })
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func actionRow(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.neonPink)
+                    .frame(width: 24)
+                Text(label).font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.textLow)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface.opacity(0.6)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func saveBio() async {
+        _ = try? await TemazoAPI.shared.userBioSet(bioText)
     }
 
     private var playlistsHeader: some View {
@@ -458,5 +546,52 @@ private struct LoginPanel: View {
         error = nil
         let result = await auth.login(email: email, password: password, remember: remember)
         if case .failure(let e) = result { error = e.errorDescription }
+    }
+}
+
+// Sheet de privacidad — hide now playing, hide history, private session.
+private struct PrivacySheet: View {
+    let current: UserPrivacy?
+    let onSave: (Bool, Bool, Bool) -> Void
+    let onClose: () -> Void
+
+    @State private var hideNowPlaying: Bool = false
+    @State private var hideHistory: Bool = false
+    @State private var privateSession: Bool = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(footer: Text("Tus seguidores no verán qué estás escuchando en tiempo real.")) {
+                    Toggle("Ocultar lo que escucho ahora", isOn: $hideNowPlaying)
+                }
+                Section(footer: Text("Tu historial no será visible para otros usuarios.")) {
+                    Toggle("Ocultar mi historial", isOn: $hideHistory)
+                }
+                Section(footer: Text("Esta sesión no se incluye en estadísticas ni feeds.")) {
+                    Toggle("Sesión privada", isOn: $privateSession)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(red: 0.07, green: 0.04, blue: 0.12))
+            .navigationTitle("Privacidad")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancelar") { onClose() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Guardar") {
+                        onSave(hideNowPlaying, hideHistory, privateSession)
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+            .onAppear {
+                if let c = current {
+                    hideNowPlaying = c.hide_now_playing == 1
+                    hideHistory = c.hide_history == 1
+                    privateSession = c.private_session == 1
+                }
+            }
+        }
     }
 }
