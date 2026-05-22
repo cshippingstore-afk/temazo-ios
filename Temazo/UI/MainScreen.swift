@@ -42,14 +42,6 @@ struct MainScreen: View {
         ZStack {
             AnimatedNeonBackground()
 
-            // WebView del player anclado al window (1×1 invisible).
-            // CRÍTICO: si el WebView no está en jerarquía, iOS pausa audio.
-            WebPlayerHostView()
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
-                .allowsHitTesting(false)
-                .zIndex(-100)
-
             VStack(spacing: 0) {
                 TemazoTopBar(
                     isPlaying: player.state.isPlaying,
