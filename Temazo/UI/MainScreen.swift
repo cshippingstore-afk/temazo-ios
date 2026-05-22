@@ -30,6 +30,7 @@ struct MainScreen: View {
     @State private var showLoadPlaylist: Bool = false
     @State private var toastText: String? = nil
     @State private var showOnboarding: Bool = false
+    @State private var recommendTrack: Track? = nil
 
     @EnvironmentObject var player: Player
     @EnvironmentObject var auth: AuthRepository
@@ -173,15 +174,20 @@ struct MainScreen: View {
                     detailStack.append(.album(id: t.albumId, slug: t.albumSlug))
                 },
                 onShare: {
-                    let url = "https://temazo.es/\(t.artistSlug ?? "")/\(t.slug ?? "")"
-                    let text = "\(t.title) — \(t.artistName ?? "")\n\(url)"
-                    let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let root = scene.windows.first?.rootViewController {
-                        root.present(av, animated: true)
+                    TemazoShare.shareTrack(t)
+                },
+                onRecommend: {
+                    if auth.currentUser == nil {
+                        showToast("Inicia sesión para recomendar")
+                    } else {
+                        recommendTrack = t
                     }
                 }
             )
+        }
+        .sheet(item: $recommendTrack) { t in
+            RecommendTrackSheet(track: t, onClose: { recommendTrack = nil })
+                .presentationDetents([.medium, .large])
         }
         .onReceive(NotificationCenter.default.publisher(for: .temazoSwitchToAccountTab)) { _ in
             // Mantener compatibilidad: si algo dispara este evento, abrir Account como detail.
@@ -330,12 +336,9 @@ struct MainScreen: View {
                     detailStack.append(.userPublic(id: id, username: username))
                 },
                 onOpenTrack: { tid in
-                    // Carga track y reproduce
                     Task {
-                        if let resp = try? await TemazoAPI.shared.artistTracks(id: nil, name: nil, exclude: nil, limit: 1) {
-                            if let t = resp.tracks.first(where: { $0.id == tid }) {
-                                onPlay(t, [t], 0)
-                            }
+                        if let t = try? await TemazoAPI.shared.trackById(tid), let track = t {
+                            onPlay(track, [track], 0)
                         }
                     }
                 }
@@ -356,8 +359,10 @@ struct MainScreen: View {
                 username: username, userId: id,
                 onBack: { _ = detailStack.popLast() },
                 onOpenArtist: { aid in detailStack.append(.artist(id: aid, slug: nil, name: nil)) },
-                onOpenPlaylist: { pid, pname in detailStack.append(.playlist(id: pid, name: pname)) },
-                onOpenUser: { uid, uname in detailStack.append(.userPublic(id: uid, username: uname)) }
+                onOpenPlaylist: { pid, pname in detailStack.append(.publicPlaylist(id: pid, slug: nil)) },
+                onOpenUser: { uid, uname in detailStack.append(.userPublic(id: uid, username: uname)) },
+                onOpenFollowers: { uid in detailStack.append(.usersFollowers(userId: uid)) },
+                onOpenFollowing: { uid in detailStack.append(.usersFollowing(userId: uid)) }
             )
         case .usersFollowers(let uid):
             UsersListScreen(

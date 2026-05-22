@@ -11,6 +11,7 @@ struct TrackOptionsSheet: View {
     var onGoToArtist: () -> Void
     var onGoToAlbum: () -> Void
     var onShare: () -> Void
+    var onRecommend: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +53,11 @@ struct TrackOptionsSheet: View {
             }
             row(icon: "square.and.arrow.up", label: "Compartir") {
                 onShare(); onDismiss()
+            }
+            if let onRec = onRecommend {
+                row(icon: "paperplane", label: "Recomendar a un amigo") {
+                    onRec(); onDismiss()
+                }
             }
             Spacer().frame(height: 12)
         }

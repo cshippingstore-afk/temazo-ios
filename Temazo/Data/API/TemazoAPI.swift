@@ -381,6 +381,14 @@ final class TemazoAPI {
         }
     }
 
+    // MARK: - Track by id (para abrir desde notificación de recomendación)
+    func trackById(_ id: Int64) async throws -> Track? {
+        struct Resp: Decodable { let track: Track? }
+        let req = request("api/track.php", query: ["id": String(id)])
+        let r: Resp = try await send(req, Resp.self)
+        return r.track
+    }
+
     // MARK: - Apple Top
     func appleTop(country: String) async throws -> AppleTopResponse {
         let req = request("api/apple_top.php", query: ["cc": country])

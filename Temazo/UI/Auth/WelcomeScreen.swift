@@ -15,8 +15,9 @@ struct WelcomeScreen: View {
     @State private var busy: Bool = false
     @State private var errorText: String? = nil
 
-    // Material3 primary del Android (Purple40) — usado en el botón principal "Crea tu cuenta"
-    private let mdPrimary = Color(red: 0.40, green: 0.31, blue: 0.64)  // 0xFF6650a4
+    // Color principal — rosa neón sólido como Android (no gradient, no púrpura MD3)
+    // Android usa colorScheme.primary del tema oscuro Temazo = neonPink
+    private let mdPrimary = Color(red: 1.00, green: 0.18, blue: 0.58)  // #FF2E93 neonPink
 
     var body: some View {
         ZStack {

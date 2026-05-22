@@ -115,9 +115,10 @@ final class Player: NSObject, ObservableObject {
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
-    /// Pre-resuelve URLs de los próximos 5 tracks en el backend (cache 4h).
-    /// Sin esto, cada next() esperaba 30-60s de yt-dlp. Con prewarm agresivo,
-    /// el cache de URL siempre está caliente y el play es casi instantáneo.
+    /// Pre-resuelve URLs de los próximos 5 tracks. Dos canales:
+    ///  1) YouTubeExtractor (iPhone) → URL directa googlevideo cacheada localmente
+    ///  2) Backend yt_resolve.php → para fallback proxy
+    /// El play de next() es casi instantáneo si la URL ya está en el cache.
     private func prewarmNext() {
         guard !state.queue.isEmpty else { return }
         var ids: [String] = []
@@ -128,7 +129,12 @@ final class Player: NSObject, ObservableObject {
             }
             if state.queue.count <= offset { break }
         }
-        if !ids.isEmpty { TemazoAPI.shared.prefetchYouTubeURLs(ids) }
+        if !ids.isEmpty {
+            // Canal 1 — iPhone extrae la URL directa de googlevideo (rápido)
+            YouTubeExtractor.shared.prefetch(videoIDs: ids)
+            // Canal 2 — backend calienta su cache (por si extractor falla)
+            TemazoAPI.shared.prefetchYouTubeURLs(ids)
+        }
     }
 
     func seekTo(seconds: Float) {
@@ -155,26 +161,62 @@ final class Player: NSObject, ObservableObject {
             state.lastError = "no youtubeId"; state.loadingState = .failed
             print("[Player] no youtubeId for track id=\(track.id)"); return
         }
-        // Calienta el cache del proxy ANTES de pedir bytes. yt_resolve.php solo cachea
-        // la URL del stream (sin proxy de bytes) → cuando AVPlayer abre yt_proxy.php
-        // los bytes empiezan a fluir inmediatamente sin esperar a yt-dlp.
-        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
 
-        guard let proxyURL = buildProxyURL(ytId: ytId) else {
-            state.lastError = "invalid proxy URL"; state.loadingState = .failed
+        // Estrategia: intentar extraer la URL directa de googlevideo en el iPhone
+        // (YouTubeExtractor, ~500ms cuando es cache hit). Si falla (signatureCipher,
+        // o timeout >1s), fallback al proxy temazo.es que ahora devuelve 302 directo.
+        // Esto es lo mismo que YouTube Music — AVPlayer habla DIRECTO con googlevideo.
+
+        // Fast path: cache hit del extractor
+        if let directURL = YouTubeExtractor.shared.cachedURL(for: ytId) {
+            startWithURL(directURL, track: track, source: "extractor-cache")
             return
         }
-        teardownObservers()
 
-        print("[Player] streaming from \(proxyURL.absoluteString)")
-        let item = AVPlayerItem(url: proxyURL)
+        // Mientras decidimos, lanzamos extractor con timeout corto + fallback al proxy
+        teardownObservers()
+        let proxyURL = buildProxyURL(ytId: ytId)
+
+        Task { @MainActor in
+            // Limit extractor a 1.5s; si tarda más, usar proxy
+            do {
+                let directURL = try await YouTubeExtractor.shared.extractStreamURL(
+                    videoID: ytId, timeoutSec: 1.5
+                )
+                // Si la canción cambió mientras esperábamos al extractor, abortar
+                guard self.state.currentTrack?.id == track.id else { return }
+                self.startWithURL(directURL, track: track, source: "extractor")
+            } catch {
+                guard self.state.currentTrack?.id == track.id else { return }
+                // Fallback: proxy (302 redirect a googlevideo)
+                if let p = proxyURL {
+                    self.startWithURL(p, track: track, source: "proxy")
+                } else {
+                    self.state.lastError = "no url"; self.state.loadingState = .failed
+                }
+            }
+        }
+        // Mientras tanto, pre-warm el proxy URL para que esté listo si caemos a fallback
+        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+    }
+
+    private func startWithURL(_ url: URL, track: Track, source: String) {
+        teardownObservers()
+        print("[Player] streaming from \(source): \(url.absoluteString.prefix(80))…")
+
+        let asset = AVURLAsset(url: url, options: [
+            "AVURLAssetHTTPHeaderFieldsKey": [
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) TemazoApp/1.0"
+            ]
+        ])
+        let item = AVPlayerItem(asset: asset)
+        // Buffer mínimo 4s → empieza a sonar rápido. Si stalls, el observer .stalled
+        // los gestiona. Total = ~80% menos de espera vs el comportamiento por defecto.
+        item.preferredForwardBufferDuration = 4
+
         let p = AVPlayer(playerItem: item)
-        // automaticallyWaitsToMinimizeStalling = true (default): AVPlayer gestiona el
-        // buffer y NO reinicia el stream si hay underrun. Si lo ponemos en false,
-        // cuando el buffer se ahoga AVPlayer cierra la conexión y abre una nueva con
-        // Range desde 0 — pero yt_proxy.php no devuelve 206 Partial Content fiable,
-        // así que el contador se REINICIA. Mantener en true.
-        p.automaticallyWaitsToMinimizeStalling = true
+        // false = empezar lo antes posible. Antes era true (espera buffer grande).
+        p.automaticallyWaitsToMinimizeStalling = false
         p.allowsExternalPlayback = false
         p.actionAtItemEnd = .none
         avPlayer = p

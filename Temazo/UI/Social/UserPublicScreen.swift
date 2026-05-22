@@ -10,6 +10,8 @@ struct UserPublicScreen: View {
     let onOpenArtist: (Int64) -> Void
     let onOpenPlaylist: (Int64, String?) -> Void
     let onOpenUser: (Int64, String?) -> Void
+    var onOpenFollowers: ((Int64) -> Void)? = nil
+    var onOpenFollowing: ((Int64) -> Void)? = nil
 
     @State private var data: UserPublicResponse? = nil
     @State private var loading: Bool = false
@@ -151,9 +153,20 @@ struct UserPublicScreen: View {
 
     private func countsRow(_ d: UserPublicResponse) -> some View {
         let followersEff = (d.counts?.followers ?? 0) + followersDelta
+        let uid = d.user?.id ?? 0
         return HStack(spacing: 24) {
-            counterChip("\(max(0, followersEff))", "Seguidores")
-            counterChip("\(d.counts?.following ?? 0)", "Siguiendo")
+            Button { onOpenFollowers?(uid) } label: {
+                counterChip("\(max(0, followersEff))", "Seguidores")
+            }
+            .buttonStyle(.plain)
+            .disabled(uid == 0)
+
+            Button { onOpenFollowing?(uid) } label: {
+                counterChip("\(d.counts?.following ?? 0)", "Siguiendo")
+            }
+            .buttonStyle(.plain)
+            .disabled(uid == 0)
+
             counterChip("\(d.counts?.public_playlists ?? 0)", "Playlists")
         }
         .padding(.vertical, 12)
