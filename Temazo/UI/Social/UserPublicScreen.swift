@@ -234,22 +234,17 @@ struct UserPublicScreen: View {
 
     private func startPolling() {
         pollTask?.cancel()
-        pollTask = Task { [weak data = $data] in
+        pollTask = Task {
             // Refresca now_playing y counts cada 15s mientras la pantalla esté abierta
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15 * 1_000_000_000)
                 if Task.isCancelled { return }
                 guard let uid = self.data?.user?.id else { continue }
-                if let r = try? await TemazoAPI.shared.nowPlayingForUser(uid) {
-                    // Update only the now_playing field (no recargar todo)
-                    await MainActor.run {
-                        if let np = r.now_playing {
-                            updateNowPlaying(np)
-                        }
-                    }
+                if let r = try? await TemazoAPI.shared.nowPlayingForUser(uid),
+                   r.now_playing != nil {
+                    updateNowPlaying(r.now_playing!)
                 }
             }
-            _ = data // capture sin warning
         }
     }
 
