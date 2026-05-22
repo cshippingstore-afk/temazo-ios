@@ -25,6 +25,9 @@ final class Player: NSObject, ObservableObject {
     private var endObs: NSObjectProtocol?
     private var stallObs: NSObjectProtocol?
     private var crossfadeMs: Int = 250
+    /// Flag para evitar doble next() entre AVPlayerItemDidPlayToEndTime y nuestro
+    /// detector manual via positionSec ≥ durationSec - 0.4s.
+    private var didAutoNext: Bool = false
 
     override init() {
         super.init()
@@ -42,6 +45,7 @@ final class Player: NSObject, ObservableObject {
         state.durationSec = Float(track.durationSec ?? 0)
         state.lastError = nil
         state.loadingState = .extracting
+        didAutoNext = false
         AudioSessionManager.shared.ensureActive()
         startAVPlayback(for: track)
         prewarmNext()
@@ -90,6 +94,7 @@ final class Player: NSObject, ObservableObject {
         state.positionSec = 0
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
+        didAutoNext = false
         startAVPlayback(for: t)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
@@ -104,20 +109,26 @@ final class Player: NSObject, ObservableObject {
         state.positionSec = 0
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
+        didAutoNext = false
         startAVPlayback(for: t)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
-    /// Pre-resuelve la URL del próximo track en el backend para que cuando suene `next()`
-    /// (o auto-next al terminar el actual) el cache del proxy esté caliente → sin esperar
-    /// los 30-60s de yt-dlp.
+    /// Pre-resuelve URLs de los próximos 5 tracks en el backend (cache 4h).
+    /// Sin esto, cada next() esperaba 30-60s de yt-dlp. Con prewarm agresivo,
+    /// el cache de URL siempre está caliente y el play es casi instantáneo.
     private func prewarmNext() {
-        guard state.queue.count > 1 else { return }
-        let nextIdx = (state.index + 1) % state.queue.count
-        if let yt = state.queue[nextIdx].youtubeId, !yt.isEmpty {
-            TemazoAPI.shared.prefetchYouTubeURLs([yt])
+        guard !state.queue.isEmpty else { return }
+        var ids: [String] = []
+        for offset in 1...5 {
+            let idx = (state.index + offset) % state.queue.count
+            if let yt = state.queue[idx].youtubeId, !yt.isEmpty, !ids.contains(yt) {
+                ids.append(yt)
+            }
+            if state.queue.count <= offset { break }
         }
+        if !ids.isEmpty { TemazoAPI.shared.prefetchYouTubeURLs(ids) }
     }
 
     func seekTo(seconds: Float) {
@@ -212,11 +223,22 @@ final class Player: NSObject, ObservableObject {
         timeObs = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] cm in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.state.positionSec = Float(CMTimeGetSeconds(cm))
+                let pos = Float(CMTimeGetSeconds(cm))
+                self.state.positionSec = pos
                 if self.state.durationSec == 0,
                    let d = self.avPlayer?.currentItem?.duration,
                    d.isValid && !d.isIndefinite {
                     self.state.durationSec = Float(CMTimeGetSeconds(d))
+                }
+                // Auto-next manual: si AVPlayerItemDidPlayToEndTime no dispara
+                // (proxy sin Content-Length, stream truncado, etc), detectamos
+                // el fin via posición ≥ duración - 0.4s y avanzamos.
+                if self.state.durationSec > 1,
+                   pos >= self.state.durationSec - 0.4,
+                   self.state.isPlaying,
+                   !self.didAutoNext {
+                    self.didAutoNext = true
+                    self.next()
                 }
             }
         }
@@ -224,7 +246,13 @@ final class Player: NSObject, ObservableObject {
         endObs = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.next() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.didAutoNext {
+                    self.didAutoNext = true
+                    self.next()
+                }
+            }
         }
 
         stallObs = NotificationCenter.default.addObserver(

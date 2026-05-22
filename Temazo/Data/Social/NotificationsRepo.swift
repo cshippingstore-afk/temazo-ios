@@ -21,7 +21,8 @@ final class NotificationsRepo: ObservableObject {
         task = Task { [weak self] in
             while !(Task.isCancelled) {
                 _ = await self?.refresh()
-                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                // Polling 15s — la campana se actualiza casi en tiempo real
+                try? await Task.sleep(nanoseconds: 15 * 1_000_000_000)
             }
         }
     }

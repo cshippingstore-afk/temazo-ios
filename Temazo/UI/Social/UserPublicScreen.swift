@@ -16,6 +16,10 @@ struct UserPublicScreen: View {
     @State private var error: String? = nil
     @State private var showReport: Bool = false
     @State private var reportReason: String = ""
+    @State private var pollTask: Task<Void, Never>? = nil
+    /// Estado optimista local del botón Seguir — actualiza al instante sin esperar al server.
+    @State private var followingOverride: Bool? = nil
+    @State private var followersDelta: Int = 0
 
     var body: some View {
         ScrollView {
@@ -76,6 +80,8 @@ struct UserPublicScreen: View {
         }
         .background(Color.bgRoot)
         .task { await load() }
+        .onAppear { startPolling() }
+        .onDisappear { pollTask?.cancel() }
         .alert("Reportar usuario", isPresented: $showReport) {
             TextField("Motivo", text: $reportReason)
             Button("Cancelar", role: .cancel) {}
@@ -126,12 +132,13 @@ struct UserPublicScreen: View {
                 .foregroundStyle(.white)
 
             if d.is_me != true {
+                let effFollowing = followingOverride ?? (d.followed_by_me == true)
                 Button { Task { await toggleFollow() } } label: {
-                    Text(d.followed_by_me == true ? "Siguiendo" : "Seguir")
+                    Text(effFollowing ? "Siguiendo" : "Seguir")
                         .font(.system(size: 13, weight: .bold))
                         .padding(.horizontal, 18).padding(.vertical, 8)
                         .background(
-                            Capsule().fill(d.followed_by_me == true ?
+                            Capsule().fill(effFollowing ?
                                            Color.white.opacity(0.15) :
                                            Color.neonPink)
                         )
@@ -143,8 +150,9 @@ struct UserPublicScreen: View {
     }
 
     private func countsRow(_ d: UserPublicResponse) -> some View {
-        HStack(spacing: 24) {
-            counterChip("\(d.counts?.followers ?? 0)", "Seguidores")
+        let followersEff = (d.counts?.followers ?? 0) + followersDelta
+        return HStack(spacing: 24) {
+            counterChip("\(max(0, followersEff))", "Seguidores")
             counterChip("\(d.counts?.following ?? 0)", "Siguiendo")
             counterChip("\(d.counts?.public_playlists ?? 0)", "Playlists")
         }
@@ -222,6 +230,40 @@ struct UserPublicScreen: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Live polling
+
+    private func startPolling() {
+        pollTask?.cancel()
+        pollTask = Task { [weak data = $data] in
+            // Refresca now_playing y counts cada 15s mientras la pantalla esté abierta
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15 * 1_000_000_000)
+                if Task.isCancelled { return }
+                guard let uid = self.data?.user?.id else { continue }
+                if let r = try? await TemazoAPI.shared.nowPlayingForUser(uid) {
+                    // Update only the now_playing field (no recargar todo)
+                    await MainActor.run {
+                        if let np = r.now_playing {
+                            updateNowPlaying(np)
+                        }
+                    }
+                }
+            }
+            _ = data // capture sin warning
+        }
+    }
+
+    private func updateNowPlaying(_ np: NowPlayingItem) {
+        // No podemos mutar UserPublicResponse (Decodable) sin rehacerla — recargo data.
+        Task {
+            if let id = userId {
+                data = try? await TemazoAPI.shared.userPublicById(id)
+            } else if let u = username {
+                data = try? await TemazoAPI.shared.userPublic(username: u)
+            }
+        }
+    }
+
     // MARK: - Actions
     private func load() async {
         loading = true; error = nil
@@ -239,8 +281,22 @@ struct UserPublicScreen: View {
 
     private func toggleFollow() async {
         guard let tid = data?.user?.id else { return }
-        _ = try? await TemazoAPI.shared.userFollowToggle(targetId: tid)
-        await load()
+        // Optimistic UI: flip al instante, contador +/-1, luego confirma con server.
+        let wasFollowing = followingOverride ?? (data?.followed_by_me == true)
+        followingOverride = !wasFollowing
+        followersDelta += wasFollowing ? -1 : 1
+
+        let r = try? await TemazoAPI.shared.userFollowToggle(targetId: tid)
+        if let r = r, let serverFollowing = r.following {
+            // Sincronizar con el server real
+            followingOverride = serverFollowing
+            await load()
+            followersDelta = 0  // los counts reales ya vienen actualizados
+        } else {
+            // Si falló, revertir
+            followingOverride = wasFollowing
+            followersDelta -= wasFollowing ? -1 : 1
+        }
     }
 
     private func toggleBlock() async {

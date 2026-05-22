@@ -7,7 +7,26 @@ final class AuthRepository: ObservableObject {
     @Published var currentUser: SessionUser? = nil
     @Published var isLoading: Bool = false
 
-    private init() {}
+    private static let userDefaultsKey = "temazo_session_user"
+
+    private init() {
+        // Restaurar usuario del disco INMEDIATAMENTE — así la UI nunca arranca
+        // mostrando WelcomeScreen mientras refreshSession() está en vuelo.
+        // El user real se valida en background y solo se reemplaza si cambió;
+        // nunca se borra por error de red (sesión firme).
+        if let data = UserDefaults.standard.data(forKey: Self.userDefaultsKey),
+           let user = try? JSONDecoder().decode(SessionUser.self, from: data) {
+            self.currentUser = user
+        }
+    }
+
+    private func persistCurrentUser() {
+        if let u = currentUser, let data = try? JSONEncoder().encode(u) {
+            UserDefaults.standard.set(data, forKey: Self.userDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.userDefaultsKey)
+        }
+    }
 
     /// Sesión FIRME: si tenemos cookies persistidas, mantenemos al usuario logueado
     /// aunque el server no responda (modo avión, error puntual). Solo se borra el user
@@ -19,6 +38,7 @@ final class AuthRepository: ObservableObject {
             let resp = try await TemazoAPI.shared.session()
             if let u = resp.user {
                 currentUser = u
+                persistCurrentUser()
             }
             // Si user=null pero teníamos cookies persistidas, no tocamos currentUser:
             // el server pudo invalidar sesión por timeout pero seguimos optimistas.
@@ -36,6 +56,7 @@ final class AuthRepository: ObservableObject {
             let resp = try await TemazoAPI.shared.loginWithGoogleIdToken(idToken)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
+                persistCurrentUser()
                 TemazoAPI.shared.persistCookies()
                 return .success(())
             }
@@ -63,6 +84,7 @@ final class AuthRepository: ObservableObject {
             let resp = try await TemazoAPI.shared.login(email: email, password: password, remember: remember)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
+                persistCurrentUser()
                 TemazoAPI.shared.persistCookies()  // mantener login entre lanzamientos
                 return .success(())
             }
@@ -82,6 +104,7 @@ final class AuthRepository: ObservableObject {
                 gender: gender, countryCode: countryCode, remember: remember)
             if resp.ok == true, let u = resp.user {
                 currentUser = u
+                persistCurrentUser()
                 TemazoAPI.shared.persistCookies()
                 return .success(())
             }
@@ -96,6 +119,7 @@ final class AuthRepository: ObservableObject {
         clearCookies()
         TemazoAPI.shared.clearPersistedCookies()
         currentUser = nil
+        persistCurrentUser()  // borra del disco
     }
 
     private func clearCookies() {

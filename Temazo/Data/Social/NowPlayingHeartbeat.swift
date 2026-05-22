@@ -19,7 +19,8 @@ final class NowPlayingHeartbeat {
         task = Task { [weak self] in
             while !(Task.isCancelled) {
                 await self?.tick()
-                try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                // Heartbeat 15s — tus seguidores ven "escuchando ahora" casi en tiempo real
+                try? await Task.sleep(nanoseconds: 15 * 1_000_000_000)
             }
         }
     }
