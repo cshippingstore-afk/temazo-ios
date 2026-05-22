@@ -36,9 +36,22 @@ struct MiniPlayer: View {
                 .shadow(color: Color.neonPink.opacity(0.6), radius: 4, y: -1)
 
                 HStack(spacing: 8) {
-                    CoverImage(url: t.coverUrl, size: 48, cornerRadius: 6)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.neonPink.opacity(0.4), lineWidth: 1))
-                        .shadow(color: Color.neonPink.opacity(0.3), radius: 6)
+                    ZStack {
+                        CoverImage(url: t.coverUrl, size: 48, cornerRadius: 6)
+                        // Cinta diagonal proporcionada para cover mini de 48dp.
+                        SourceRibbon(
+                            source: player.state.source,
+                            trackId: t.id,
+                            ribbonWidth: 56,
+                            ribbonHeight: 14,
+                            fontSize: 8
+                        )
+                        .frame(width: 48, height: 48)
+                    }
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.neonPink.opacity(0.4), lineWidth: 1))
+                    .shadow(color: Color.neonPink.opacity(0.3), radius: 6)
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(t.title)

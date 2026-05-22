@@ -102,20 +102,32 @@ struct FullPlayer: View {
     }
 
     private func cover(track: Track) -> some View {
-        CoverImage(url: track.coverUrl, size: 320, cornerRadius: 20)
-            .shadow(color: Color.neonPink.opacity(0.5), radius: 40, y: 12)
-            .shadow(color: Color.neonPurple.opacity(0.3), radius: 60, y: 20)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(LinearGradient(colors: [Color.neonPink.opacity(0.6), Color.neonPurple.opacity(0.3)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
-                            lineWidth: 1.5)
+        ZStack {
+            CoverImage(url: track.coverUrl, size: 320, cornerRadius: 20)
+            SourceRibbon(
+                source: player.state.source,
+                trackId: track.id,
+                ribbonWidth: 130,
+                ribbonHeight: 28,
+                fontSize: 14
             )
-            .onTapGesture {
-                if track.albumId != nil || (track.albumSlug?.isEmpty == false) {
-                    onCoverClick()
-                }
+            .frame(width: 320, height: 320)
+        }
+        .frame(width: 320, height: 320)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: Color.neonPink.opacity(0.5), radius: 40, y: 12)
+        .shadow(color: Color.neonPurple.opacity(0.3), radius: 60, y: 20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(LinearGradient(colors: [Color.neonPink.opacity(0.6), Color.neonPurple.opacity(0.3)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        lineWidth: 1.5)
+        )
+        .onTapGesture {
+            if track.albumId != nil || (track.albumSlug?.isEmpty == false) {
+                onCoverClick()
             }
+        }
     }
 
     private func titleBlock(track: Track) -> some View {

@@ -4,7 +4,9 @@ import SwiftUI
 /// Los tabs viven ahora en la bottom NavigationBar (no aquí).
 struct TemazoTopBar: View {
     let isPlaying: Bool
+    var unreadNotifs: Int = 0
     var onAvatarClick: () -> Void = {}
+    var onBellClick: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 8) {
@@ -14,6 +16,24 @@ struct TemazoTopBar: View {
                 .frame(height: 40)
             EqualizerBars(isActive: isPlaying)
             Spacer()
+            // Campana de notificaciones con badge unread
+            Button(action: onBellClick) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .frame(width: 40, height: 40)
+                    if unreadNotifs > 0 {
+                        Text(unreadNotifs > 9 ? "9+" : "\(unreadNotifs)")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.neonPink))
+                            .offset(x: -4, y: 4)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
             // Avatar — abre AccountScreen como detail
             Button(action: onAvatarClick) {
                 ZStack {

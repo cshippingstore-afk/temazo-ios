@@ -9,6 +9,11 @@ enum Detail: Hashable {
     case favorites
     case account
     case playlist(id: Int64, name: String?)
+    case notifications
+    case userPublic(id: Int64?, username: String?)
+    case usersFollowers(userId: Int64)
+    case usersFollowing(userId: Int64)
+    case userSearch
 }
 
 extension Notification.Name {
@@ -22,11 +27,13 @@ struct MainScreen: View {
     @State private var addToPlaylistTrack: Track? = nil
     @State private var showLoadPlaylist: Bool = false
     @State private var toastText: String? = nil
+    @State private var showOnboarding: Bool = false
 
     @EnvironmentObject var player: Player
     @EnvironmentObject var auth: AuthRepository
     @EnvironmentObject var favorites: FavoritesRepo
     @StateObject private var optionsBus = TrackOptionsBus.shared
+    @ObservedObject private var notifs = NotificationsRepo.shared
 
     var body: some View {
         ZStack {
@@ -35,7 +42,15 @@ struct MainScreen: View {
             VStack(spacing: 0) {
                 TemazoTopBar(
                     isPlaying: player.state.isPlaying,
-                    onAvatarClick: { detailStack.append(.account) }
+                    unreadNotifs: notifs.unread,
+                    onAvatarClick: { detailStack.append(.account) },
+                    onBellClick: {
+                        if auth.currentUser == nil {
+                            showToast("Inicia sesión para ver notificaciones")
+                        } else {
+                            detailStack.append(.notifications)
+                        }
+                    }
                 )
                 ZStack {
                     if let last = detailStack.last {
@@ -170,12 +185,41 @@ struct MainScreen: View {
             guard auth.currentUser != nil else { return }
             Task { _ = try? await TemazoAPI.shared.historyAdd(id, source: "app") }
         }
+        .fullScreenCover(isPresented: Binding(
+            get: { auth.currentUser == nil && !auth.isLoading },
+            set: { _ in })
+        ) {
+            WelcomeScreen()
+        }
+        .fullScreenCover(isPresented: $showOnboarding) {
+            OnboardingScreen(onFinish: { showOnboarding = false })
+        }
         .task {
+            // TopTracksRepo + NotificationsRepo + NowPlayingHeartbeat: start una vez al abrir la app.
+            TopTracksRepo.shared.start()
+            NowPlayingHeartbeat.shared.start()
             await auth.refreshSession()
             await syncFavs()
+            await checkOnboarding()
+            if auth.currentUser != nil { NotificationsRepo.shared.start() }
         }
         .onChange(of: auth.currentUser?.id) { _, _ in
-            Task { await syncFavs() }
+            Task {
+                await syncFavs()
+                await checkOnboarding()
+                if auth.currentUser != nil { NotificationsRepo.shared.start() }
+            }
+        }
+    }
+
+    private func checkOnboarding() async {
+        guard auth.currentUser != nil else { showOnboarding = false; return }
+        do {
+            let r = try await TemazoAPI.shared.onboardingStatus()
+            showOnboarding = !r.onboarded
+        } catch {
+            // En caso de error, no forzar onboarding repetido.
+            showOnboarding = false
         }
     }
 
@@ -261,6 +305,40 @@ struct MainScreen: View {
                 playlistName: name,
                 onBack: { _ = detailStack.popLast() },
                 onPlay: onPlay
+            )
+        case .notifications:
+            NotificationsScreen(
+                onBack: { _ = detailStack.popLast() },
+                onOpenUser: { id, username in
+                    detailStack.append(.userPublic(id: id, username: username))
+                },
+                onOpenTrack: { _ in /* TODO: abrir track */ }
+            )
+        case .userPublic(let id, let username):
+            UserPublicScreen(
+                username: username, userId: id,
+                onBack: { _ = detailStack.popLast() },
+                onOpenArtist: { aid in detailStack.append(.artist(id: aid, slug: nil, name: nil)) },
+                onOpenPlaylist: { pid, pname in detailStack.append(.playlist(id: pid, name: pname)) },
+                onOpenUser: { uid, uname in detailStack.append(.userPublic(id: uid, username: uname)) }
+            )
+        case .usersFollowers(let uid):
+            UsersListScreen(
+                kind: .followers, userId: uid, initialQuery: nil,
+                onBack: { _ = detailStack.popLast() },
+                onOpen: { id, uname in detailStack.append(.userPublic(id: id, username: uname)) }
+            )
+        case .usersFollowing(let uid):
+            UsersListScreen(
+                kind: .following, userId: uid, initialQuery: nil,
+                onBack: { _ = detailStack.popLast() },
+                onOpen: { id, uname in detailStack.append(.userPublic(id: id, username: uname)) }
+            )
+        case .userSearch:
+            UsersListScreen(
+                kind: .search, userId: nil, initialQuery: nil,
+                onBack: { _ = detailStack.popLast() },
+                onOpen: { id, uname in detailStack.append(.userPublic(id: id, username: uname)) }
             )
         }
     }

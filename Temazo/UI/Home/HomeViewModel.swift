@@ -1,26 +1,24 @@
 import Foundation
 import Combine
 
-struct GenreItem: Identifiable, Equatable {
-    let id: String       // slug
-    let name: String     // visible
-    let emoji: String
-}
-
+/// ViewModel del Top de Apple Music por país hispanohablante.
+/// Antes era "trending world por género"; ahora el tab Top muestra el Apple Top 100.
 @MainActor
 final class HomeViewModel: ObservableObject {
-    @Published var selectedGenre: String = "reggaeton"
     @Published var tracks: [Track] = []
     @Published var lastUpdateMin: Int? = nil
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
     @Published var country: String = HomeViewModel.loadStoredCountry()
+    @Published var fallback: Bool = false
+    @Published var totalMatched: Int = 0
 
-    private var cache: [String: [Track]] = [:]   // key = "country_genre"
+    private var cache: [String: [Track]] = [:]   // key = country code
+    private var cacheUpdatedAt: [String: Date] = [:]
 
     static let supportedCountries: [String] = [
-        "ES","MX","AR","CO","PE","VE","CL","EC","GT","CU","BO","DO",
-        "HN","PY","SV","NI","CR","PA","UY","PR","GQ"
+        "ES","MX","AR","CO","CL","PE","VE","EC","BO","PY","UY","CR","PA","CU",
+        "DO","PR","GT","HN","SV","NI","GQ"
     ]
 
     private static func loadStoredCountry() -> String {
@@ -41,67 +39,62 @@ final class HomeViewModel: ObservableObject {
         if country == safe { return }
         country = safe
         UserDefaults.standard.set(safe, forKey: "temazo_country")
-        Task { await loadTrending(selectedGenre, force: true) }
+        Task { await loadTop(force: true) }
     }
 
-    let genres: [GenreItem] = [
-        .init(id: "reggaeton", name: "Reggaetón", emoji: "🔥"),
-        .init(id: "pop", name: "Pop", emoji: "🎤"),
-        .init(id: "rock", name: "Rock", emoji: "🎸"),
-        .init(id: "hip-hop", name: "Hip-hop", emoji: "🎧"),
-        .init(id: "latin-pop", name: "Latin Pop", emoji: "🌶️"),
-        .init(id: "regional-mexicano", name: "Regional Mex", emoji: "🤠"),
-        .init(id: "electronic", name: "Electrónica", emoji: "💿"),
-        .init(id: "rnb-soul", name: "R&B y Soul", emoji: "💜"),
-        .init(id: "indie", name: "Indie", emoji: "✨"),
-        .init(id: "metal", name: "Metal", emoji: "🤘"),
-        .init(id: "k-pop", name: "K-Pop", emoji: "🌸"),
-        .init(id: "j-pop", name: "J-Pop", emoji: "🌸"),
-        .init(id: "flamenco", name: "Flamenco", emoji: "💃"),
-        .init(id: "rock-latino", name: "Rock Latino", emoji: "🎸"),
-        .init(id: "bachata", name: "Bachata", emoji: "🎶"),
-        .init(id: "reggae-caribbean", name: "Reggae", emoji: "🏝"),
-        .init(id: "folk-acoustic", name: "Folk", emoji: "🎻"),
-        .init(id: "jazz", name: "Jazz", emoji: "🎷"),
-        .init(id: "blues", name: "Blues", emoji: "🎺"),
-        .init(id: "classical", name: "Clásica", emoji: "🎼"),
-        .init(id: "country-americana", name: "Country", emoji: "🤠"),
-        .init(id: "soundtracks", name: "Bandas Sonoras", emoji: "🎬"),
-        .init(id: "africana", name: "Africana", emoji: "🌍"),
-        .init(id: "arabe", name: "Árabe", emoji: "🪕"),
-        .init(id: "bollywood-india", name: "Bollywood", emoji: "🎭"),
-        .init(id: "mandopop-cantopop", name: "Mandopop", emoji: "🎴"),
-    ]
-
-    func loadTrending(_ genre: String, force: Bool = false) async {
-        selectedGenre = genre
-        let key = "\(country)_\(genre)"
-        if let cached = cache[key], !force {
+    func loadTop(force: Bool = false) async {
+        if let cached = cache[country], !force {
             tracks = cached
-            await silentRefresh(genre)
+            if let updated = cacheUpdatedAt[country] {
+                let min = Int(Date().timeIntervalSince(updated) / 60)
+                lastUpdateMin = min
+            }
+            await silentRefresh()
             return
         }
         isLoading = true
         defer { isLoading = false }
-        await silentRefresh(genre)
+        await silentRefresh()
     }
 
     func forceRefresh() async {
-        cache.removeValue(forKey: "\(country)_\(selectedGenre)")
-        await silentRefresh(selectedGenre)
+        cache.removeValue(forKey: country)
+        await silentRefresh()
     }
 
-    private func silentRefresh(_ genre: String) async {
+    private func silentRefresh() async {
         do {
-            let resp = try await TemazoAPI.shared.trendingByGenre(genre, limit: 50, country: country)
-            let valid = resp.tracks.filter { $0.youtubeId != nil && !($0.youtubeId ?? "").isEmpty }
+            let resp = try await TemazoAPI.shared.appleTop(country: country)
+            let valid = resp.tracks.filter { ($0.youtubeId ?? "").isEmpty == false }
             tracks = valid
-            cache["\(country)_\(genre)"] = valid
-            lastUpdateMin = resp.lastUpdateMin
+            cache[country] = valid
+            cacheUpdatedAt[country] = Date()
+            fallback = resp.fallback ?? false
+            totalMatched = resp.total_matched ?? valid.count
+            if let updated = resp.updated_at, !updated.isEmpty {
+                lastUpdateMin = HomeViewModel.minutesSinceISO(updated)
+            } else {
+                lastUpdateMin = 0
+            }
             error = nil
             TemazoAPI.shared.prefetchYouTubeURLs(valid.prefix(20).compactMap { $0.youtubeId })
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private static func minutesSinceISO(_ iso: String) -> Int? {
+        let fmt = ISO8601DateFormatter()
+        if let d = fmt.date(from: iso) {
+            return max(0, Int(Date().timeIntervalSince(d) / 60))
+        }
+        // Fallback: "2026-05-22 21:00:00" UTC
+        let f2 = DateFormatter()
+        f2.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        f2.timeZone = TimeZone(identifier: "UTC")
+        if let d = f2.date(from: iso) {
+            return max(0, Int(Date().timeIntervalSince(d) / 60))
+        }
+        return nil
     }
 }

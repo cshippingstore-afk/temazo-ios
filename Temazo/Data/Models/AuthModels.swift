@@ -389,3 +389,248 @@ extension Track {
         }()
     }
 }
+
+// ============================================================
+// MARK: - Modelos del Top Apple Music
+// ============================================================
+
+struct AppleTopResponse: Decodable {
+    let requested_cc: String?
+    let country_code: String?
+    let fallback: Bool?
+    let updated_at: String?
+    let total_matched: Int?
+    let tracks: [Track]
+}
+
+struct TopTrackIdsResponse: Decodable {
+    let count: Int
+    let ids: [Int64]
+}
+
+// ============================================================
+// MARK: - Onboarding
+// ============================================================
+
+struct OnboardingStatusResponse: Decodable {
+    let onboarded: Bool
+}
+
+struct OnboardingArtist: Decodable, Identifiable {
+    let id: Int64
+    let name: String?
+    let slug: String?
+    let image_medium: String?
+    let image_large: String?
+    let followers: Int64?
+    let genre_slug: String?
+
+    var displayImage: String? {
+        let raw = image_medium ?? image_large ?? ""
+        if raw.isEmpty { return nil }
+        if raw.hasPrefix("http") { return raw }
+        return "https://temazo.es" + (raw.hasPrefix("/") ? raw : "/\(raw)")
+    }
+}
+
+struct OnboardingArtistsResponse: Decodable {
+    let artists: [OnboardingArtist]
+}
+
+// ============================================================
+// MARK: - Social: usuarios públicos
+// ============================================================
+
+struct PublicUserBrief: Decodable, Identifiable {
+    let id: Int64
+    let username: String?
+    let avatar_url: String?
+    let bio: String?
+    let followers: Int?
+    let following: Int?
+    let public_playlists: Int?
+    let followed_by_me: Int?
+
+    var displayAvatar: String? {
+        guard let raw = avatar_url, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("http") { return raw }
+        return "https://temazo.es" + (raw.hasPrefix("/") ? raw : "/\(raw)")
+    }
+    var isFollowedByMe: Bool { (followed_by_me ?? 0) == 1 }
+}
+
+struct UserCounts: Decodable {
+    let followers: Int
+    let following: Int
+    let public_playlists: Int
+    let followed_artists: Int
+}
+
+struct TopItemTrack: Decodable, Identifiable {
+    let id: Int64
+    let title: String?
+    let slug: String?
+    let artist_id: Int64?
+    let artist_name: String?
+    let cover_medium: String?
+    let plays: Int?
+}
+
+struct TopItemArtist: Decodable, Identifiable {
+    let id: Int64
+    let name: String?
+    let slug: String?
+    let image_medium: String?
+    let plays: Int?
+}
+
+struct NowPlayingItem: Decodable {
+    let id: Int64
+    let title: String?
+    let artist_name: String?
+    let cover_medium: String?
+    let youtube_id: String?
+    let updated_at: String?
+}
+
+struct UserPublicResponse: Decodable {
+    let user: PublicUserBrief?
+    let counts: UserCounts?
+    let banner_url: String?
+    let pinned_playlist: PublicPlaylist?
+    let playlists: [PublicPlaylist]?
+    let followed_artists: [FollowedArtist]?
+    let top_tracks: [TopItemTrack]?
+    let top_artists: [TopItemArtist]?
+    let now_playing: NowPlayingItem?
+    let followed_by_me: Bool?
+    let blocked_by_me: Bool?
+    let is_me: Bool?
+}
+
+// PublicPlaylist y DiscoverPlaylistsResponse ya están definidos en TemazoAPI.swift
+// (con CodingKeys snake_case→camelCase). Aquí solo se referencian.
+// FollowedArtist ya está definido más arriba en este mismo archivo.
+
+struct UserSearchResponse: Decodable {
+    let users: [PublicUserBrief]
+}
+
+struct UserListResponse: Decodable {
+    let users: [PublicUserBrief]
+}
+
+struct UserFollowToggleResponse: Decodable {
+    let ok: Bool?
+    let following: Bool?
+}
+
+struct UserBioResponse: Decodable {
+    let ok: Bool?
+    let bio: String?
+}
+
+struct UserPrivacy: Decodable {
+    let hide_now_playing: Int
+    let hide_history: Int
+    let private_session: Int
+}
+
+struct UserPrivacyResponse: Decodable {
+    let privacy: UserPrivacy?
+    let ok: Bool?
+}
+
+struct BlockToggleResponse: Decodable {
+    let ok: Bool?
+    let blocked: Bool?
+}
+
+// ============================================================
+// MARK: - Notificaciones in-app
+// ============================================================
+
+struct TemazoNotification: Decodable, Identifiable {
+    let id: Int64
+    let kind: String
+    let actor_id: Int64?
+    let target_id: Int64?
+    let payload: String?
+    let read_at: String?
+    let created_at: String?
+    let actor_username: String?
+    let actor_avatar: String?
+    var isUnread: Bool { read_at == nil }
+}
+
+struct NotificationsResponse: Decodable {
+    let notifications: [TemazoNotification]
+    let unread: Int
+}
+
+struct FriendActivityEvent: Decodable, Identifiable {
+    let id: Int64
+    let user_id: Int64
+    let kind: String
+    let target_id: Int64?
+    let target_kind: String?
+    let payload: String?
+    let created_at: String?
+    let username: String?
+    let avatar_url: String?
+}
+
+struct FriendActivityResponse: Decodable {
+    let activity: [FriendActivityEvent]
+}
+
+// ============================================================
+// MARK: - Discover/Public playlists & follow
+// ============================================================
+
+struct PublicPlaylistResponse: Decodable {
+    let playlist: PublicPlaylist?
+    let tracks: [Track]?
+    let following: Bool?
+    let is_owner: Bool?
+}
+
+struct PlaylistFollowResponse: Decodable {
+    let ok: Bool?
+    let following: Bool?
+}
+
+// ============================================================
+// MARK: - Home por país (Inicio Spotify-style)
+// ============================================================
+
+struct HomeCountryResponse: Decodable {
+    let country_code: String?
+    let tracks: [Track]
+    let artists: [OnboardingArtist]
+}
+
+// ============================================================
+// MARK: - Monthly recap
+// ============================================================
+
+struct RecapGenre: Decodable {
+    let genre: String?
+    let plays: Int?
+}
+
+struct MonthlyRecapResponse: Decodable {
+    let minutes: Int
+    let plays: Int
+    let top_tracks: [TopItemTrack]
+    let top_artists: [TopItemArtist]
+    let top_genres: [RecapGenre]
+}
+
+struct TracksOnlyResponse: Decodable {
+    let tracks: [Track]
+}
+
+struct NowPlayingForUserResponse: Decodable {
+    let now_playing: NowPlayingItem?
+}

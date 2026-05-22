@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Tab "Top" — Apple Music Top 100 por país hispanohablante.
+/// Selector de país con bandera rectangular. Cards horizontales + lista vertical.
+/// Brazalete TOP automático en el player cuando se reproduce desde aquí.
 struct HomeScreen: View {
     let onTrackClick: (Track, [Track], Int) -> Void
     @StateObject private var vm = HomeViewModel()
@@ -12,13 +15,21 @@ struct HomeScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     LiveIndicator(minutes: vm.lastUpdateMin)
+                    if vm.fallback {
+                        Text("(fallback)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
                     Spacer()
                     Button(action: { showCountryPicker = true }) {
                         HStack(spacing: 6) {
-                            CountryFlag(cc: vm.country, height: 12)
+                            CountryFlag(cc: vm.country, height: 14)
                             Text(vm.country)
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Color.white.opacity(0.75))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Color.white.opacity(0.55))
                         }
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(Capsule().fill(Color.white.opacity(0.06)))
@@ -26,17 +37,19 @@ struct HomeScreen: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 16)
-
-                GenreChips(genres: vm.genres, selected: vm.selectedGenre) { g in
-                    Task { await vm.loadTrending(g.id) }
-                }
-                .padding(.vertical, 4)
+                .padding(.top, 4)
 
                 if vm.isLoading && vm.tracks.isEmpty {
                     ProgressView().tint(.neonPink)
                         .frame(maxWidth: .infinity).padding(.top, 60)
+                } else if vm.tracks.isEmpty {
+                    Text("Sin datos del Top de \(vm.country) aún")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
                 } else {
-                    Text("🔥 Más sonadas")
+                    Text("🍎 Top 100 \(countryName(vm.country))")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
@@ -51,6 +64,7 @@ struct HomeScreen: View {
                                     isPlaying: player.state.isPlaying
                                 ) {
                                     onTrackClick(t, vm.tracks, idx)
+                                    Player.shared.state.source = "TOP_\(vm.country)"
                                 }
                             }
                         }
@@ -72,6 +86,7 @@ struct HomeScreen: View {
                                 isPlaying: player.state.isPlaying
                             ) {
                                 onTrackClick(t, vm.tracks, idx)
+                                Player.shared.state.source = "TOP_\(vm.country)"
                             }
                         }
                     }
@@ -80,7 +95,7 @@ struct HomeScreen: View {
                 Spacer(minLength: 30)
             }
         }
-        .task { await vm.loadTrending(vm.selectedGenre) }
+        .task { await vm.loadTop() }
         .refreshable { await vm.forceRefresh() }
         .sheet(isPresented: $showCountryPicker) {
             CountryPickerSheet(current: vm.country, onPick: { cc in
@@ -88,6 +103,10 @@ struct HomeScreen: View {
                 showCountryPicker = false
             }, onClose: { showCountryPicker = false })
         }
+    }
+
+    private func countryName(_ cc: String) -> String {
+        HISPANIC_COUNTRIES.first(where: { $0.cc == cc })?.name ?? cc
     }
 }
 
@@ -116,39 +135,11 @@ struct CountryPickerSheet: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color(red: 0.10, green: 0.04, blue: 0.18))
-            .navigationTitle("País para los Tops")
+            .navigationTitle("País para el Top")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cerrar") { onClose() } }
             }
-        }
-    }
-}
-
-private struct GenreChips: View {
-    let genres: [GenreItem]
-    let selected: String
-    let onSelect: (GenreItem) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(genres) { g in
-                    Button { onSelect(g) } label: {
-                        HStack(spacing: 4) {
-                            Text(g.emoji)
-                            Text(g.name).font(.system(size: 13, weight: .medium))
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(selected == g.id ? Color.neonPink : Color.bgSurfaceHi)
-                        )
-                        .foregroundStyle(selected == g.id ? .white : Color.textMid)
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
         }
     }
 }

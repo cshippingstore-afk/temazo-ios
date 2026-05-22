@@ -31,11 +31,12 @@ final class Player: NSObject, ObservableObject {
         UIApplication.shared.beginReceivingRemoteControlEvents()
     }
 
-    func playTrack(_ track: Track, queue: [Track], index: Int) {
+    func playTrack(_ track: Track, queue: [Track], index: Int, source: String? = nil) {
         state.queue = queue
         state.index = index
         state.currentTrack = track
         state.positionSec = 0
+        state.source = source
         // Duración del backend = source of truth (yt-dlp/AVAsset a veces reporta x2 por
         // headers del proxy o contenedor sin metadata de duración fiable).
         state.durationSec = Float(track.durationSec ?? 0)
@@ -45,6 +46,19 @@ final class Player: NSObject, ObservableObject {
         startAVPlayback(for: track)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
+    }
+
+    /// Toggle shuffle. Reordena la cola en sitio (sin parar la reproducción actual).
+    func toggleShuffle() {
+        state.shuffle.toggle()
+        guard !state.queue.isEmpty, let current = state.currentTrack else { return }
+        if state.shuffle {
+            var rest = state.queue
+            rest.remove(at: state.index)
+            rest.shuffle()
+            state.queue = [current] + rest
+            state.index = 0
+        }
     }
 
     func togglePlay() { if state.isPlaying { pause() } else { resume() } }

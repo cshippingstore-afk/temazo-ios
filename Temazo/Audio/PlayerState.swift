@@ -10,6 +10,10 @@ struct PlayerState: Equatable {
     var durationSec: Float = 0
     var loadingState: LoadingState = .idle
     var lastError: String? = nil
+    /// Etiqueta del origen de la cola: "TOP", "PLAYLIST", "ALBUM", "ARTIST", null...
+    /// Usada por SourceRibbon para pintar el "brazalete TOP" en el cover.
+    var source: String? = nil
+    var shuffle: Bool = false
 }
 
 enum LoadingState: String, Equatable {

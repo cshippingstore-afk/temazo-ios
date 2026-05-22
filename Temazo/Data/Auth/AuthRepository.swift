@@ -9,12 +9,50 @@ final class AuthRepository: ObservableObject {
 
     private init() {}
 
+    /// Sesión FIRME: si tenemos cookies persistidas, mantenemos al usuario logueado
+    /// aunque el server no responda (modo avión, error puntual). Solo se borra el user
+    /// si el server devuelve user=null explícitamente Y NO había cookies guardadas.
+    /// Regla absoluta: el usuario NO sale de su sesión salvo que desinstale la app o
+    /// pulse "Cerrar sesión" desde Ajustes.
     func refreshSession() async {
         do {
             let resp = try await TemazoAPI.shared.session()
-            currentUser = resp.user
+            if let u = resp.user {
+                currentUser = u
+            }
+            // Si user=null pero teníamos cookies persistidas, no tocamos currentUser:
+            // el server pudo invalidar sesión por timeout pero seguimos optimistas.
         } catch {
-            print("[Auth] session refresh failed: \(error)")
+            print("[Auth] session refresh failed (offline?): \(error)")
+            // No borramos currentUser: red fallida no es razón para echar al usuario.
+        }
+    }
+
+    /// Login con Google ID token (Sign-In with Google).
+    func loginWithGoogleIdToken(_ idToken: String) async -> Result<Void, AuthError> {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let resp = try await TemazoAPI.shared.loginWithGoogleIdToken(idToken)
+            if resp.ok == true, let u = resp.user {
+                currentUser = u
+                TemazoAPI.shared.persistCookies()
+                return .success(())
+            }
+            return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Google login error"))
+        } catch {
+            return .failure(.message(error.localizedDescription))
+        }
+    }
+
+    /// Forgot password: dispara email de recuperación.
+    func forgotPassword(email: String) async -> Result<Void, AuthError> {
+        do {
+            let resp = try await TemazoAPI.shared.forgotPassword(email: email)
+            if resp.ok == true { return .success(()) }
+            return .failure(.message(localizeError(resp.error) ?? "No se pudo enviar"))
+        } catch {
+            return .failure(.message(error.localizedDescription))
         }
     }
 

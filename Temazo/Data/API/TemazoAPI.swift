@@ -380,6 +380,251 @@ final class TemazoAPI {
             session.dataTask(with: req) { _, _, _ in }.resume()
         }
     }
+
+    // MARK: - Apple Top
+    func appleTop(country: String) async throws -> AppleTopResponse {
+        let req = request("api/apple_top.php", query: ["cc": country])
+        return try await send(req, AppleTopResponse.self)
+    }
+
+    func topTrackIds() async throws -> TopTrackIdsResponse {
+        let req = request("api/top_track_ids.php")
+        return try await send(req, TopTrackIdsResponse.self)
+    }
+
+    // MARK: - Onboarding
+    func onboardingStatus() async throws -> OnboardingStatusResponse {
+        let req = request("api/user_data.php", query: ["a": "onboarding_status"])
+        return try await send(req, OnboardingStatusResponse.self)
+    }
+
+    @discardableResult
+    func onboardingFinish() async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "onboarding_finish"], method: "POST")
+        return try await send(req, GenericResponse.self)
+    }
+
+    func onboardingArtists(genre: String, limit: Int = 5) async throws -> OnboardingArtistsResponse {
+        let req = request("api/onboarding_artists.php",
+                          query: ["genre": genre, "limit": String(limit)])
+        return try await send(req, OnboardingArtistsResponse.self)
+    }
+
+    // MARK: - Google Sign-In
+    @discardableResult
+    func loginWithGoogleIdToken(_ idToken: String) async throws -> LoginResponse {
+        if csrfToken == nil { _ = try await session() }
+        let req = request("api/auth.php", query: ["a": "google"], method: "POST",
+                          form: ["id_token": idToken, "remember": "1"])
+        let resp = try await send(req, LoginResponse.self)
+        if let c = resp.csrf { csrfToken = c }
+        return resp
+    }
+
+    // MARK: - Home (país)
+    func homeCountry(country: String) async throws -> HomeCountryResponse {
+        let req = request("api/home_country.php", query: ["cc": country])
+        return try await send(req, HomeCountryResponse.self)
+    }
+
+    // MARK: - Perfil público y social
+    func userPublic(username: String) async throws -> UserPublicResponse {
+        let req = request("api/user_public.php", query: ["u": username])
+        return try await send(req, UserPublicResponse.self)
+    }
+
+    func userPublicById(_ id: Int64) async throws -> UserPublicResponse {
+        let req = request("api/user_public.php", query: ["id": String(id)])
+        return try await send(req, UserPublicResponse.self)
+    }
+
+    func userSearch(_ q: String, limit: Int = 20) async throws -> UserSearchResponse {
+        let req = request("api/user_search.php",
+                          query: ["q": q, "limit": String(limit)])
+        return try await send(req, UserSearchResponse.self)
+    }
+
+    @discardableResult
+    func userFollowToggle(targetId: Int64) async throws -> UserFollowToggleResponse {
+        let req = request("api/user_data.php", query: ["a": "user_follow_toggle"],
+                          method: "POST", form: ["target_id": String(targetId)])
+        return try await send(req, UserFollowToggleResponse.self)
+    }
+
+    func userFollowers(userId: Int64, limit: Int = 50) async throws -> UserListResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "user_followers",
+                                  "user_id": String(userId),
+                                  "limit": String(limit)])
+        return try await send(req, UserListResponse.self)
+    }
+
+    func userFollowingUsers(userId: Int64, limit: Int = 50) async throws -> UserListResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "user_following_users",
+                                  "user_id": String(userId),
+                                  "limit": String(limit)])
+        return try await send(req, UserListResponse.self)
+    }
+
+    @discardableResult
+    func userBioSet(_ bio: String) async throws -> UserBioResponse {
+        let req = request("api/user_data.php", query: ["a": "user_bio_set"],
+                          method: "POST", form: ["bio": bio])
+        return try await send(req, UserBioResponse.self)
+    }
+
+    func userPrivacyGet() async throws -> UserPrivacyResponse {
+        let req = request("api/user_data.php", query: ["a": "user_privacy_get"])
+        return try await send(req, UserPrivacyResponse.self)
+    }
+
+    @discardableResult
+    func userPrivacySet(hideNowPlaying: Bool, hideHistory: Bool, privateSession: Bool) async throws -> UserPrivacyResponse {
+        let req = request("api/user_data.php", query: ["a": "user_privacy_set"],
+                          method: "POST",
+                          form: ["hide_now_playing": hideNowPlaying ? "1" : "0",
+                                 "hide_history": hideHistory ? "1" : "0",
+                                 "private_session": privateSession ? "1" : "0"])
+        return try await send(req, UserPrivacyResponse.self)
+    }
+
+    @discardableResult
+    func userBlockToggle(targetId: Int64) async throws -> BlockToggleResponse {
+        let req = request("api/user_data.php", query: ["a": "user_block_toggle"],
+                          method: "POST", form: ["target_id": String(targetId)])
+        return try await send(req, BlockToggleResponse.self)
+    }
+
+    @discardableResult
+    func userReport(targetId: Int64, reason: String) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "user_report"],
+                          method: "POST",
+                          form: ["target_id": String(targetId), "reason": reason])
+        return try await send(req, GenericResponse.self)
+    }
+
+    // MARK: - Notificaciones
+    func notifications(limit: Int = 30) async throws -> NotificationsResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "notifications", "limit": String(limit)])
+        return try await send(req, NotificationsResponse.self)
+    }
+
+    @discardableResult
+    func notifMarkRead(_ ids: [Int64]) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "notif_mark_read"],
+                          method: "POST",
+                          form: ["ids": ids.map(String.init).joined(separator: ",")])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func notifMarkAllRead() async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "notif_mark_all_read"], method: "POST")
+        return try await send(req, GenericResponse.self)
+    }
+
+    func friendActivity(limit: Int = 30) async throws -> FriendActivityResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "friend_activity", "limit": String(limit)])
+        return try await send(req, FriendActivityResponse.self)
+    }
+
+    // MARK: - Now playing + recap
+    @discardableResult
+    func nowPlayingPing(trackId: Int64) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "now_playing_ping"],
+                          method: "POST", form: ["track_id": String(trackId)])
+        return try await send(req, GenericResponse.self)
+    }
+
+    func nowPlayingForUser(_ userId: Int64) async throws -> NowPlayingForUserResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "now_playing_for_user", "user_id": String(userId)])
+        return try await send(req, NowPlayingForUserResponse.self)
+    }
+
+    func releaseRadar(limit: Int = 30) async throws -> TracksOnlyResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "release_radar", "limit": String(limit)])
+        return try await send(req, TracksOnlyResponse.self)
+    }
+
+    func dailyMix(limit: Int = 30) async throws -> TracksOnlyResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "daily_mix", "limit": String(limit)])
+        return try await send(req, TracksOnlyResponse.self)
+    }
+
+    func monthlyRecap() async throws -> MonthlyRecapResponse {
+        let req = request("api/user_data.php", query: ["a": "monthly_recap"])
+        return try await send(req, MonthlyRecapResponse.self)
+    }
+
+    // MARK: - Playlists públicas / follow / colaborativo / duplicar
+    @discardableResult
+    func playlistSetPublic(_ playlistId: Int64, isPublic: Bool) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_set_public"],
+                          method: "POST",
+                          form: ["playlist_id": String(playlistId), "is_public": isPublic ? "1" : "0"])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func playlistSetCollaborative(_ playlistId: Int64, collaborative: Bool) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_set_collaborative"],
+                          method: "POST",
+                          form: ["playlist_id": String(playlistId), "collaborative": collaborative ? "1" : "0"])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func playlistFollowToggle(_ playlistId: Int64) async throws -> PlaylistFollowResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_follow_toggle"],
+                          method: "POST", form: ["playlist_id": String(playlistId)])
+        return try await send(req, PlaylistFollowResponse.self)
+    }
+
+    func playlistsFollowing(limit: Int = 30) async throws -> DiscoverPlaylistsResponse {
+        let req = request("api/user_data.php",
+                          query: ["a": "playlists_following", "limit": String(limit)])
+        return try await send(req, DiscoverPlaylistsResponse.self)
+    }
+
+    @discardableResult
+    func playlistDuplicate(_ playlistId: Int64) async throws -> PlaylistCreateResponse {
+        let req = request("api/user_data.php", query: ["a": "playlist_duplicate"],
+                          method: "POST", form: ["playlist_id": String(playlistId)])
+        return try await send(req, PlaylistCreateResponse.self)
+    }
+
+    func playlistPublic(idOrSlug: String) async throws -> PublicPlaylistResponse {
+        // El endpoint acepta id numérico o slug.
+        let key = Int64(idOrSlug) != nil ? "id" : "slug"
+        let req = request("api/playlist_public.php", query: [key: idOrSlug])
+        return try await send(req, PublicPlaylistResponse.self)
+    }
+
+    // MARK: - Recomendar tracks a usuarios
+    @discardableResult
+    func trackRecommend(trackId: Int64, toUserId: Int64, note: String = "") async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "track_recommend"],
+                          method: "POST",
+                          form: ["track_id": String(trackId),
+                                 "to_user_id": String(toUserId),
+                                 "note": note])
+        return try await send(req, GenericResponse.self)
+    }
+
+    // MARK: - Forgot password
+    @discardableResult
+    func forgotPassword(email: String) async throws -> GenericResponse {
+        if csrfToken == nil { _ = try await session() }
+        let req = request("api/auth.php", query: ["a": "forgot"], method: "POST",
+                          form: ["email": email])
+        return try await send(req, GenericResponse.self)
+    }
 }
 
 // MARK: - Response models
