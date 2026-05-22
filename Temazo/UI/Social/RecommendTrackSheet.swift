@@ -126,7 +126,7 @@ struct RecommendTrackSheet: View {
 
     private func loadFollowing() async {
         guard let me = auth.currentUser else { return }
-        if let r = try? await TemazoAPI.shared.userFollowingUsers(userId: me.id) {
+        if let r = try? await TemazoAPI.shared.userFollowingUsers(userId: Int64(me.id)) {
             following = r.users
         }
     }

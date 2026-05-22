@@ -311,7 +311,7 @@ struct MainScreen: View {
                 },
                 onPublicProfileClick: {
                     guard let me = auth.currentUser else { return }
-                    detailStack.append(.userPublic(id: me.id, username: nil))
+                    detailStack.append(.userPublic(id: Int64(me.id), username: nil))
                 },
                 onRecapClick: { detailStack.append(.recap) },
                 onNotificationsClick: { detailStack.append(.notifications) }
