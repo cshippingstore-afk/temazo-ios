@@ -337,7 +337,8 @@ struct MainScreen: View {
                 },
                 onOpenTrack: { tid in
                     Task {
-                        if let t = try? await TemazoAPI.shared.trackById(tid), let track = t {
+                        let resp = try? await TemazoAPI.shared.trackById(tid)
+                        if let track = resp ?? nil {
                             onPlay(track, [track], 0)
                         }
                     }
