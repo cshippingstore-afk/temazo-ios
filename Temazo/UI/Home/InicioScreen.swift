@@ -14,12 +14,7 @@ struct InicioScreen: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                Text(auth.currentUser != nil ? "Hola otra vez 👋" : "Bienvenido a Temazo")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
+                Spacer().frame(height: 12)
 
                 if !vm.followingFeed.isEmpty {
                     sectionTitle("✨ Lo último de tus artistas")

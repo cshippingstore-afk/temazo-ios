@@ -8,7 +8,7 @@ enum Detail: Hashable {
     case following
     case favorites
     case account
-    case playlist(id: Int64, name: String?)
+    case playlist(id: Int64, name: String?, isLikedDefault: Bool = false)
     case publicPlaylist(id: Int64?, slug: String?)
     case notifications
     case userPublic(id: Int64?, username: String?)
@@ -78,7 +78,8 @@ struct MainScreen: View {
                         case .playlists: PlaylistsScreen(
                             onAvatarClick: { detailStack.append(.account) },
                             onPlaylistClick: { p in
-                                detailStack.append(.playlist(id: p.id, name: p.name))
+                                detailStack.append(.playlist(id: p.id, name: p.name,
+                                                             isLikedDefault: p.isLikedDefault == true))
                             },
                             onPublicPlaylistClick: { pid in
                                 detailStack.append(.publicPlaylist(id: pid, slug: nil))
@@ -313,19 +314,32 @@ struct MainScreen: View {
                 onFollowingClick: { detailStack.append(.following) },
                 onFavoritesClick: { detailStack.append(.favorites) },
                 onPlaylistClick: { p in
-                    detailStack.append(.playlist(id: p.id, name: p.name))
+                    detailStack.append(.playlist(id: p.id, name: p.name,
+                                                 isLikedDefault: p.isLikedDefault == true))
                 },
                 onPublicProfileClick: {
                     guard let me = auth.currentUser else { return }
                     detailStack.append(.userPublic(id: Int64(me.id), username: nil))
                 },
                 onRecapClick: { detailStack.append(.recap) },
-                onNotificationsClick: { detailStack.append(.notifications) }
+                onNotificationsClick: { detailStack.append(.notifications) },
+                onUsersFollowingClick: {
+                    guard let me = auth.currentUser else { return }
+                    detailStack.append(.usersFollowing(userId: Int64(me.id)))
+                },
+                onUsersFollowersClick: {
+                    guard let me = auth.currentUser else { return }
+                    detailStack.append(.usersFollowers(userId: Int64(me.id)))
+                },
+                onUserSearchClick: {
+                    detailStack.append(.userSearch)
+                }
             )
-        case .playlist(let id, let name):
+        case .playlist(let id, let name, let liked):
             PlaylistDetailScreen(
                 playlistId: id,
                 playlistName: name,
+                isLikedDefault: liked,
                 onBack: { _ = detailStack.popLast() },
                 onPlay: onPlay
             )

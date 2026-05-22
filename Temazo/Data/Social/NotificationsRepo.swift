@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 /// Polling de notificaciones in-app del usuario logueado.
 /// El TopBar muestra una campana con el badge `unread`.
@@ -21,9 +22,18 @@ final class NotificationsRepo: ObservableObject {
         task = Task { [weak self] in
             while !(Task.isCancelled) {
                 _ = await self?.refresh()
-                // Polling 15s — la campana se actualiza casi en tiempo real
-                try? await Task.sleep(nanoseconds: 15 * 1_000_000_000)
+                // Polling 5s — la campana se actualiza casi instantánea.
+                // Carga ligera (sólo cuenta de unread + últimas 50 notifs).
+                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
             }
+        }
+
+        // Refresh inmediato cuando la app vuelve al foreground
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in _ = await self?.refresh() }
         }
     }
 

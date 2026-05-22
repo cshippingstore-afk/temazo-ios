@@ -96,6 +96,14 @@ struct HomeScreen: View {
             }
         }
         .task { await vm.loadTop() }
+        .onChange(of: vm.tracks.count) { _, _ in
+            // Pre-extraer las primeras 10 URLs en cuanto se carga el top —
+            // cuando el usuario pulse play, el cache local ya está caliente.
+            let ids = vm.tracks.prefix(10).compactMap { $0.youtubeId }
+            if !ids.isEmpty {
+                YouTubeExtractor.shared.prefetch(videoIDs: Array(ids))
+            }
+        }
         .refreshable { await vm.forceRefresh() }
         .sheet(isPresented: $showCountryPicker) {
             CountryPickerSheet(current: vm.country, onPick: { cc in

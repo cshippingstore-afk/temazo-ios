@@ -10,12 +10,15 @@ struct AccountScreen: View {
     @EnvironmentObject var player: Player
 
     let onHistoryClick: () -> Void
-    let onFollowingClick: () -> Void
+    let onFollowingClick: () -> Void        // artistas que sigo
     let onFavoritesClick: () -> Void
     let onPlaylistClick: (Playlist) -> Void
     var onPublicProfileClick: (() -> Void)? = nil
     var onRecapClick: (() -> Void)? = nil
     var onNotificationsClick: (() -> Void)? = nil
+    var onUsersFollowingClick: (() -> Void)? = nil    // usuarios que sigo
+    var onUsersFollowersClick: (() -> Void)? = nil    // quién me sigue
+    var onUserSearchClick: (() -> Void)? = nil
 
     @State private var showRegister = false
     @State private var showSettings = false
@@ -190,10 +193,23 @@ struct AccountScreen: View {
     }
 
     private var accessCards: some View {
-        // Favoritos quitado — vive en la pestaña Playlists del bottom nav.
-        HStack(spacing: 8) {
-            accessCard(emoji: "👥", title: "Siguiendo", count: counts.follows, action: onFollowingClick)
-            accessCard(emoji: "📜", title: "Historial", count: counts.history, action: onHistoryClick)
+        VStack(spacing: 8) {
+            // Fila 1 — usuarios sociales
+            HStack(spacing: 8) {
+                accessCard(emoji: "👥", title: "Siguiendo", count: 0,
+                           action: { onUsersFollowingClick?() })
+                accessCard(emoji: "❤️", title: "Seguidores", count: 0,
+                           action: { onUsersFollowersClick?() })
+                accessCard(emoji: "🔍", title: "Buscar", count: 0,
+                           action: { onUserSearchClick?() })
+            }
+            // Fila 2 — artistas + historial
+            HStack(spacing: 8) {
+                accessCard(emoji: "🎤", title: "Artistas", count: counts.follows,
+                           action: onFollowingClick)
+                accessCard(emoji: "📜", title: "Historial", count: counts.history,
+                           action: onHistoryClick)
+            }
         }
         .padding(.horizontal, 12)
     }

@@ -162,42 +162,27 @@ final class Player: NSObject, ObservableObject {
             print("[Player] no youtubeId for track id=\(track.id)"); return
         }
 
-        // Estrategia: intentar extraer la URL directa de googlevideo en el iPhone
-        // (YouTubeExtractor, ~500ms cuando es cache hit). Si falla (signatureCipher,
-        // o timeout >1s), fallback al proxy temazo.es que ahora devuelve 302 directo.
-        // Esto es lo mismo que YouTube Music — AVPlayer habla DIRECTO con googlevideo.
-
-        // Fast path: cache hit del extractor
-        if let directURL = YouTubeExtractor.shared.cachedURL(for: ytId) {
-            startWithURL(directURL, track: track, source: "extractor-cache")
+        // Estrategia: cache hit del extractor → URL directa googlevideo (instantáneo).
+        // Si no, ir directo al proxy temazo.es?id=X (302 redirect ya configurado).
+        // NO esperar al extractor: muchas canciones populares tienen signatureCipher
+        // y el extractor falla — perderíamos segundos en vano. Mejor probar proxy ya
+        // y dejar el extractor corriendo en background para futuros plays.
+        if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
+            startWithURL(cached, track: track, source: "extractor-cache")
+            // Calienta también para próxima vez
+            TemazoAPI.shared.prefetchYouTubeURLs([ytId])
             return
         }
 
-        // Mientras decidimos, lanzamos extractor con timeout corto + fallback al proxy
-        teardownObservers()
-        let proxyURL = buildProxyURL(ytId: ytId)
-
-        Task { @MainActor in
-            // Limit extractor a 1.5s; si tarda más, usar proxy
-            do {
-                let directURL = try await YouTubeExtractor.shared.extractStreamURL(
-                    videoID: ytId, timeoutSec: 1.5
-                )
-                // Si la canción cambió mientras esperábamos al extractor, abortar
-                guard self.state.currentTrack?.id == track.id else { return }
-                self.startWithURL(directURL, track: track, source: "extractor")
-            } catch {
-                guard self.state.currentTrack?.id == track.id else { return }
-                // Fallback: proxy (302 redirect a googlevideo)
-                if let p = proxyURL {
-                    self.startWithURL(p, track: track, source: "proxy")
-                } else {
-                    self.state.lastError = "no url"; self.state.loadingState = .failed
-                }
-            }
+        guard let proxyURL = buildProxyURL(ytId: ytId) else {
+            state.lastError = "no url"; state.loadingState = .failed
+            return
         }
-        // Mientras tanto, pre-warm el proxy URL para que esté listo si caemos a fallback
+        startWithURL(proxyURL, track: track, source: "proxy-302")
+
+        // Background: warmer del backend + intento del extractor para próxima vez
         TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+        Task.detached { _ = try? await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 8) }
     }
 
     private func startWithURL(_ url: URL, track: Track, source: String) {

@@ -5,6 +5,7 @@ import SwiftUI
 struct PlaylistDetailScreen: View {
     let playlistId: Int64
     let playlistName: String?
+    var isLikedDefault: Bool = false   // si es "Canciones que me gustan" → menú reducido
     var onBack: () -> Void
     var onPlay: (Track, [Track], Int) -> Void
 
@@ -36,33 +37,37 @@ struct PlaylistDetailScreen: View {
                     .lineLimit(1)
                 Spacer()
                 Menu {
-                    Button {
-                        renameText = currentName.isEmpty ? (playlistName ?? "") : currentName
-                        showRename = true
-                    } label: { Label("Renombrar", systemImage: "pencil") }
+                    if !isLikedDefault {
+                        Button {
+                            renameText = currentName.isEmpty ? (playlistName ?? "") : currentName
+                            showRename = true
+                        } label: { Label("Renombrar", systemImage: "pencil") }
 
-                    Toggle(isPublic ? "Pública" : "Privada", isOn: Binding(
-                        get: { isPublic },
-                        set: { v in Task { await togglePublic(v) } }
-                    ))
+                        Toggle(isPublic ? "Pública" : "Privada", isOn: Binding(
+                            get: { isPublic },
+                            set: { v in Task { await togglePublic(v) } }
+                        ))
 
-                    Toggle(isCollaborative ? "Colaborativa" : "No colaborativa", isOn: Binding(
-                        get: { isCollaborative },
-                        set: { v in Task { await toggleCollaborative(v) } }
-                    ))
+                        Toggle(isCollaborative ? "Colaborativa" : "No colaborativa", isOn: Binding(
+                            get: { isCollaborative },
+                            set: { v in Task { await toggleCollaborative(v) } }
+                        ))
+                    }
 
                     Button { Task { await duplicate() } } label: {
                         Label("Duplicar", systemImage: "doc.on.doc")
                     }
 
-                    Button { share() } label: {
-                        Label("Compartir", systemImage: "square.and.arrow.up")
-                    }
+                    if !isLikedDefault {
+                        Button { share() } label: {
+                            Label("Compartir", systemImage: "square.and.arrow.up")
+                        }
 
-                    Divider()
-                    Button(role: .destructive) {
-                        showDelete = true
-                    } label: { Label("Borrar playlist", systemImage: "trash") }
+                        Divider()
+                        Button(role: .destructive) {
+                            showDelete = true
+                        } label: { Label("Borrar playlist", systemImage: "trash") }
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 20))
@@ -231,13 +236,19 @@ struct PlaylistDetailScreen: View {
     }
 
     private func reload() async {
+        // Si la task fue cancelada (el usuario hizo otro refresh o salió), abortar limpio.
+        if Task.isCancelled { return }
         loading = true
         defer { loading = false }
         do {
             let resp = try await TemazoAPI.shared.playlistTracks(playlistId)
+            if Task.isCancelled { return }
             tracks = resp.tracks.filter { !($0.youtubeId ?? "").isEmpty }
             error = nil
         } catch let e {
+            // No mostrar "operación cancelada" — es ruido, simplemente abortar
+            let ns = e as NSError
+            if ns.code == NSURLErrorCancelled { return }
             error = e.localizedDescription
         }
     }

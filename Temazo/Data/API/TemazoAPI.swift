@@ -455,7 +455,7 @@ final class TemazoAPI {
     @discardableResult
     func userFollowToggle(targetId: Int64) async throws -> UserFollowToggleResponse {
         let req = request("api/user_data.php", query: ["a": "user_follow_toggle"],
-                          method: "POST", form: ["target_id": String(targetId)])
+                          method: "POST", form: ["user_id": String(targetId)])
         return try await send(req, UserFollowToggleResponse.self)
     }
 
@@ -500,7 +500,7 @@ final class TemazoAPI {
     @discardableResult
     func userBlockToggle(targetId: Int64) async throws -> BlockToggleResponse {
         let req = request("api/user_data.php", query: ["a": "user_block_toggle"],
-                          method: "POST", form: ["target_id": String(targetId)])
+                          method: "POST", form: ["user_id": String(targetId)])
         return try await send(req, BlockToggleResponse.self)
     }
 
@@ -508,7 +508,7 @@ final class TemazoAPI {
     func userReport(targetId: Int64, reason: String) async throws -> GenericResponse {
         let req = request("api/user_data.php", query: ["a": "user_report"],
                           method: "POST",
-                          form: ["target_id": String(targetId), "reason": reason])
+                          form: ["user_id": String(targetId), "reason": reason])
         return try await send(req, GenericResponse.self)
     }
 
@@ -520,10 +520,10 @@ final class TemazoAPI {
     }
 
     @discardableResult
-    func notifMarkRead(_ ids: [Int64]) async throws -> GenericResponse {
+    func notifMarkRead(_ id: Int64) async throws -> GenericResponse {
+        // Backend espera notif_id (single int), no array.
         let req = request("api/user_data.php", query: ["a": "notif_mark_read"],
-                          method: "POST",
-                          form: ["ids": ids.map(String.init).joined(separator: ",")])
+                          method: "POST", form: ["notif_id": String(id)])
         return try await send(req, GenericResponse.self)
     }
 
@@ -573,9 +573,10 @@ final class TemazoAPI {
     // MARK: - Playlists públicas / follow / colaborativo / duplicar
     @discardableResult
     func playlistSetPublic(_ playlistId: Int64, isPublic: Bool) async throws -> GenericResponse {
+        // Backend espera `public`, no `is_public`.
         let req = request("api/user_data.php", query: ["a": "playlist_set_public"],
                           method: "POST",
-                          form: ["playlist_id": String(playlistId), "is_public": isPublic ? "1" : "0"])
+                          form: ["playlist_id": String(playlistId), "public": isPublic ? "1" : "0"])
         return try await send(req, GenericResponse.self)
     }
 
@@ -601,9 +602,11 @@ final class TemazoAPI {
     }
 
     @discardableResult
-    func playlistDuplicate(_ playlistId: Int64) async throws -> PlaylistCreateResponse {
+    func playlistDuplicate(_ playlistId: Int64, name: String = "Copia") async throws -> PlaylistCreateResponse {
+        // Backend espera source_playlist_id + name (no playlist_id solo).
         let req = request("api/user_data.php", query: ["a": "playlist_duplicate"],
-                          method: "POST", form: ["playlist_id": String(playlistId)])
+                          method: "POST",
+                          form: ["source_playlist_id": String(playlistId), "name": name])
         return try await send(req, PlaylistCreateResponse.self)
     }
 
@@ -617,11 +620,12 @@ final class TemazoAPI {
     // MARK: - Recomendar tracks a usuarios
     @discardableResult
     func trackRecommend(trackId: Int64, toUserId: Int64, note: String = "") async throws -> GenericResponse {
+        // Backend espera user_id + track_id + message (no to_user_id ni note).
         let req = request("api/user_data.php", query: ["a": "track_recommend"],
                           method: "POST",
-                          form: ["track_id": String(trackId),
-                                 "to_user_id": String(toUserId),
-                                 "note": note])
+                          form: ["user_id": String(toUserId),
+                                 "track_id": String(trackId),
+                                 "message": note])
         return try await send(req, GenericResponse.self)
     }
 
