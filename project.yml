@@ -42,7 +42,11 @@ targets:
         SWIFT_EMIT_LOC_STRINGS: YES
         INFOPLIST_FILE: Temazo/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        CODE_SIGN_ENTITLEMENTS: Temazo/Temazo.entitlements
+        # CODE_SIGN_ENTITLEMENTS: Temazo/Temazo.entitlements
+        # ^ Re-activar cuando el provisioning profile incluya:
+        #   - Associated Domains (universal links temazo.es)
+        #   - Push Notifications (APNs aps-environment)
+        # Hoy el profile no las tiene → el archive falla en signing.
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
