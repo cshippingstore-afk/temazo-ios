@@ -216,49 +216,7 @@ struct MainScreen: View {
             RecommendTrackSheet(track: t, onClose: { recommendTrack = nil })
                 .presentationDetents([.medium, .large])
         }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoSwitchToAccountTab)) { _ in
-            // Mantener compatibilidad: si algo dispara este evento, abrir Account como detail.
-            if !detailStack.contains(.account) { detailStack.append(.account) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenNotificationSettings)) { _ in
-            detailStack.append(.notificationSettings)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPrivacy)) { _ in
-            detailStack.append(.privacy)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenEditProfile)) { _ in
-            detailStack.append(.editProfile)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenImports)) { _ in
-            detailStack.append(.imports)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPlaylistsFollowing)) { _ in
-            detailStack.append(.playlistsFollowing)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenUserByUsername)) { notif in
-            if let username = notif.userInfo?["username"] as? String {
-                detailStack.append(.userPublic(id: nil, username: username))
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPublicPlaylistById)) { notif in
-            if let pid = notif.userInfo?["playlistId"] as? Int64 {
-                detailStack.append(.publicPlaylist(id: pid, slug: nil))
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenArtistBySlug)) { notif in
-            if let slug = notif.userInfo?["slug"] as? String {
-                detailStack.append(.artist(id: nil, slug: slug, name: nil))
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenAlbumBySlug)) { notif in
-            if let slug = notif.userInfo?["slug"] as? String {
-                detailStack.append(.album(id: nil, slug: slug))
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .temazoToastLoginRequired)) { _ in
-            showToast("Inicia sesión para continuar")
-            detailStack = [.account]
-        }
+        .modifier(MainScreenDeepLinkListeners(detailStack: $detailStack, toastText: $toastText))
         .onChange(of: player.state.currentTrack?.id) { _, newId in
             guard let id = newId else { return }
             guard auth.currentUser != nil else { return }
@@ -650,4 +608,62 @@ struct MainScreen: View {
         .environmentObject(AuthRepository.shared)
         .environmentObject(FavoritesRepo.shared)
         .environmentObject(SettingsRepo.shared)
+}
+
+/// Listeners de NotificationCenter para deep-links y navegación cross-cover.
+/// Extraído a ViewModifier para evitar que el body de MainScreen exceda el
+/// tiempo de type-check del Swift compiler (era "unable to type-check this
+/// expression in reasonable time").
+private struct MainScreenDeepLinkListeners: ViewModifier {
+    @Binding var detailStack: [Detail]
+    @Binding var toastText: String?
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .temazoSwitchToAccountTab)) { _ in
+                if !detailStack.contains(.account) { detailStack.append(.account) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenNotificationSettings)) { _ in
+                detailStack.append(.notificationSettings)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPrivacy)) { _ in
+                detailStack.append(.privacy)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenEditProfile)) { _ in
+                detailStack.append(.editProfile)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenImports)) { _ in
+                detailStack.append(.imports)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPlaylistsFollowing)) { _ in
+                detailStack.append(.playlistsFollowing)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenUserByUsername)) { notif in
+                if let username = notif.userInfo?["username"] as? String {
+                    detailStack.append(.userPublic(id: nil, username: username))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPublicPlaylistById)) { notif in
+                if let pid = notif.userInfo?["playlistId"] as? Int64 {
+                    detailStack.append(.publicPlaylist(id: pid, slug: nil))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenArtistBySlug)) { notif in
+                if let slug = notif.userInfo?["slug"] as? String {
+                    detailStack.append(.artist(id: nil, slug: slug, name: nil))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoOpenAlbumBySlug)) { notif in
+                if let slug = notif.userInfo?["slug"] as? String {
+                    detailStack.append(.album(id: nil, slug: slug))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .temazoToastLoginRequired)) { _ in
+                toastText = "Inicia sesión para continuar"
+                detailStack = [.account]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    if toastText == "Inicia sesión para continuar" { toastText = nil }
+                }
+            }
+    }
 }
