@@ -634,3 +634,169 @@ struct TracksOnlyResponse: Decodable {
 struct NowPlayingForUserResponse: Decodable {
     let now_playing: NowPlayingItem?
 }
+
+// MARK: - Events (conciertos globales)
+
+struct EventListItem: Decodable, Identifiable, Hashable {
+    let id: Int64
+    let title: String
+    let slug: String?
+    let primary_artist: String?
+    let venue_name: String?
+    let city_name: String?
+    let city_slug: String?
+    let country: String?
+    let country_iso: String?
+    let image_url: String?
+    let start_date: String?
+    let last_date: String?
+    let dates_count: Int?
+    let price: Double?
+    let currency: String?
+    let permalink: String?
+}
+
+struct EventsListResponse: Decodable {
+    let ok: Bool?
+    let country: String?
+    let events: [EventListItem]?
+}
+
+// MARK: - News (noticias)
+
+struct NewsItem: Decodable, Identifiable, Hashable {
+    let id: Int64
+    let source: String?
+    let source_slug: String?
+    let title: String
+    let slug: String?
+    let summary: String?
+    let image: String?
+    let url: String?
+    let published_at: String?
+}
+
+struct NewsListResponse: Decodable {
+    let ok: Bool?
+    let news: [NewsItem]?
+}
+
+// ============================================================
+// MARK: - Imports (solicitar artistas/canciones)
+// ============================================================
+
+struct ImportItem: Decodable, Identifiable, Hashable {
+    let id: Int64
+    let type: String                 // "artist" | "track"
+    let artist_name: String?
+    let track_title: String?
+    let status: String               // pending | searching | importing | done | rejected | failed
+    let request_count: Int
+    let requested_at: String?
+    let url: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let i = try? c.decode(Int64.self, forKey: .id) { id = i }
+        else if let s = try? c.decode(String.self, forKey: .id), let i = Int64(s) { id = i }
+        else { id = 0 }
+        type = (try? c.decode(String.self, forKey: .type)) ?? ""
+        artist_name = try? c.decode(String.self, forKey: .artist_name)
+        track_title = try? c.decode(String.self, forKey: .track_title)
+        status = (try? c.decode(String.self, forKey: .status)) ?? ""
+        request_count = (try? c.decode(Int.self, forKey: .request_count)) ?? 1
+        requested_at = try? c.decode(String.self, forKey: .requested_at)
+        url = try? c.decode(String.self, forKey: .url)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, artist_name, track_title, status, request_count, requested_at, url
+    }
+}
+
+struct ImportTop: Decodable, Hashable {
+    let type: String
+    let artist_name: String?
+    let track_title: String?
+    let request_count: Int
+    let status: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = (try? c.decode(String.self, forKey: .type)) ?? ""
+        artist_name = try? c.decode(String.self, forKey: .artist_name)
+        track_title = try? c.decode(String.self, forKey: .track_title)
+        request_count = (try? c.decode(Int.self, forKey: .request_count)) ?? 1
+        status = try? c.decode(String.self, forKey: .status)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, artist_name, track_title, request_count, status
+    }
+}
+
+struct MyImportsResponse: Decodable {
+    let ok: Bool?
+    let mine: [ImportItem]
+    let top: [ImportTop]
+    let error: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try? c.decode(Bool.self, forKey: .ok)
+        mine = (try? c.decode([ImportItem].self, forKey: .mine)) ?? []
+        top = (try? c.decode([ImportTop].self, forKey: .top)) ?? []
+        error = try? c.decode(String.self, forKey: .error)
+    }
+
+    enum CodingKeys: String, CodingKey { case ok, mine, top, error }
+}
+
+struct ImportRequestResponse: Decodable {
+    let ok: Bool?
+    let status: String?              // pending | already_exists | already_requested | rate_limited
+    let request_id: Int64?
+    let redirect_url: String?
+    let message: String?
+    let error: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try? c.decode(Bool.self, forKey: .ok)
+        status = try? c.decode(String.self, forKey: .status)
+        if let i = try? c.decode(Int64.self, forKey: .request_id) { request_id = i }
+        else if let s = try? c.decode(String.self, forKey: .request_id) { request_id = Int64(s) }
+        else { request_id = nil }
+        redirect_url = try? c.decode(String.self, forKey: .redirect_url)
+        message = try? c.decode(String.self, forKey: .message)
+        error = try? c.decode(String.self, forKey: .error)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case ok, status, request_id, redirect_url, message, error
+    }
+}
+
+// ============================================================
+// MARK: - Notif prefs (push notification settings)
+// ============================================================
+
+struct NotifPrefsResponse: Decodable {
+    let ok: Bool?
+    let prefs: [String: Bool]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try? c.decode(Bool.self, forKey: .ok)
+        // El backend puede devolver bools o ints (0/1). Aceptamos ambos.
+        if let m = try? c.decode([String: Bool].self, forKey: .prefs) {
+            prefs = m
+        } else if let raw = try? c.decode([String: Int].self, forKey: .prefs) {
+            prefs = raw.mapValues { $0 != 0 }
+        } else {
+            prefs = [:]
+        }
+    }
+
+    enum CodingKeys: String, CodingKey { case ok, prefs }
+}

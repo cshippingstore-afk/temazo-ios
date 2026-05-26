@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// TopBar — réplica del Android v1.54+: logo izquierda · ecualizador · avatar derecha.
-/// Los tabs viven ahora en la bottom NavigationBar (no aquí).
+/// TopBar — réplica del Android v1.54+: logo izquierda · ecualizador · acciones derecha.
+/// Acciones: [Events] [News] [Bell+badge] [Avatar]
+/// Los tabs viven en la bottom NavigationBar.
 struct TemazoTopBar: View {
     let isPlaying: Bool
     var unreadNotifs: Int = 0
     var onAvatarClick: () -> Void = {}
     var onBellClick: () -> Void = {}
+    var onEventsClick: () -> Void = {}
+    var onNewsClick: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 8) {
@@ -16,6 +19,22 @@ struct TemazoTopBar: View {
                 .frame(height: 40)
             EqualizerBars(isActive: isPlaying)
             Spacer()
+            // Atajo Eventos (siempre visible, no requiere login)
+            Button(action: onEventsClick) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            // Atajo Noticias (siempre visible)
+            Button(action: onNewsClick) {
+                Image(systemName: "newspaper.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
             // Campana de notificaciones con badge unread
             Button(action: onBellClick) {
                 ZStack(alignment: .topTrailing) {

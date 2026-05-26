@@ -179,7 +179,7 @@ struct FullPlayer: View {
     }
 
     private func transportRow() -> some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 20) {
             Button { player.toggleShuffle() } label: {
                 Image(systemName: "shuffle")
                     .font(.system(size: 18, weight: .semibold))
@@ -199,6 +199,11 @@ struct FullPlayer: View {
             Button { player.next() } label: {
                 Image(systemName: "forward.fill").font(.system(size: 30))
                     .foregroundStyle(.white)
+            }
+            Button { player.toggleRepeat() } label: {
+                Image(systemName: player.state.repeatMode == 2 ? "repeat.1" : "repeat")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(player.state.repeatMode == 0 ? Color.textMid : Color.neonPink)
             }
             Button { showQueue = true } label: {
                 Image(systemName: "list.bullet")

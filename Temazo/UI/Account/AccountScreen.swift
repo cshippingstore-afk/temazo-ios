@@ -25,6 +25,10 @@ struct AccountScreen: View {
     @State private var profile: UserProfile? = nil
     @State private var counts = ProfileCounts()
     @State private var playlists: [Playlist] = []
+    /// Contadores sociales reales (followers / following users) via userPublic(me).
+    @State private var followingUsersCount: Int = 0
+    @State private var followersCount: Int = 0
+    @State private var socialPollTask: Task<Void, Never>? = nil
 
     @State private var showCreatePlaylist = false
     @State private var newPlaylistName = ""
@@ -94,9 +98,31 @@ struct AccountScreen: View {
             if auth.currentUser != nil {
                 await loadProfile()
                 await loadPlaylists()
+                await loadSocialCounts()
             } else {
                 profile = nil; counts = ProfileCounts(); playlists = []
+                followingUsersCount = 0; followersCount = 0
             }
+        }
+        .onAppear {
+            // Polling cada 10 s mientras AccountScreen está visible para mantener
+            // los contadores de Siguiendo / Seguidores en tiempo real.
+            socialPollTask?.cancel()
+            socialPollTask = Task {
+                while !Task.isCancelled {
+                    if auth.currentUser != nil { await loadSocialCounts() }
+                    try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                }
+            }
+        }
+        .onDisappear { socialPollTask?.cancel(); socialPollTask = nil }
+    }
+
+    private func loadSocialCounts() async {
+        guard let me = auth.currentUser else { return }
+        if let r = try? await TemazoAPI.shared.userPublicById(Int64(me.id)) {
+            followingUsersCount = r.counts?.following ?? 0
+            followersCount = r.counts?.followers ?? 0
         }
     }
 
@@ -193,23 +219,14 @@ struct AccountScreen: View {
     }
 
     private var accessCards: some View {
-        VStack(spacing: 8) {
-            // Fila 1 — usuarios sociales
-            HStack(spacing: 8) {
-                accessCard(emoji: "👥", title: "Siguiendo", count: 0,
-                           action: { onUsersFollowingClick?() })
-                accessCard(emoji: "❤️", title: "Seguidores", count: 0,
-                           action: { onUsersFollowersClick?() })
-                accessCard(emoji: "🔍", title: "Buscar", count: 0,
-                           action: { onUserSearchClick?() })
-            }
-            // Fila 2 — artistas + historial
-            HStack(spacing: 8) {
-                accessCard(emoji: "🎤", title: "Artistas", count: counts.follows,
-                           action: onFollowingClick)
-                accessCard(emoji: "📜", title: "Historial", count: counts.history,
-                           action: onHistoryClick)
-            }
+        // 3 tarjetas únicas: Siguiendo · Seguidores · Historial
+        HStack(spacing: 8) {
+            accessCard(emoji: "👥", title: "Siguiendo", count: followingUsersCount,
+                       action: { onUsersFollowingClick?() })
+            accessCard(emoji: "❤️", title: "Seguidores", count: followersCount,
+                       action: { onUsersFollowersClick?() })
+            accessCard(emoji: "📜", title: "Historial", count: counts.history,
+                       action: onHistoryClick)
         }
         .padding(.horizontal, 12)
     }
@@ -226,6 +243,33 @@ struct AccountScreen: View {
             .background(Color.neonPink.opacity(0.14))
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    /// Fila estilo iOS para acciones del perfil — icono rosa + label + chevron.
+    private func actionRow(icon: String, label: String, badge: Int? = nil,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Color.neonPink)
+                    .frame(width: 24)
+                Text(label).font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                Spacer()
+                if let b = badge, b > 0 {
+                    Text("\(b)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.white.opacity(0.4))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+        }
+        .buttonStyle(.plain)
     }
 
     private var actionButtons: some View {
@@ -271,8 +315,18 @@ struct AccountScreen: View {
 
     private var socialActions: some View {
         VStack(spacing: 8) {
-            actionRow(icon: "person.fill", label: "Ver mi perfil público") { onPublicProfileClick?() }
+            if (profile?.username ?? "").isEmpty == false {
+                actionRow(icon: "person.fill", label: "Ver mi perfil público") { onPublicProfileClick?() }
+            }
             actionRow(icon: "chart.bar.fill", label: "Mi recap") { onRecapClick?() }
+            actionRow(icon: "magnifyingglass", label: "Buscar usuarios") { onUserSearchClick?() }
+            actionRow(icon: "music.mic", label: "Artistas que sigo",
+                      badge: counts.follows > 0 ? counts.follows : nil) {
+                onFollowingClick()
+            }
+            actionRow(icon: "music.note.list", label: "Playlists que sigo") {
+                NotificationCenter.default.post(name: .temazoOpenPlaylistsFollowing, object: nil)
+            }
             actionRow(icon: "bell.fill", label: "Notificaciones") { onNotificationsClick?() }
             actionRow(icon: "lock.shield", label: "Privacidad") {
                 Task {
@@ -293,26 +347,6 @@ struct AccountScreen: View {
             }, onClose: { showPrivacy = false })
             .presentationDetents([.medium])
         }
-    }
-
-    private func actionRow(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.neonPink)
-                    .frame(width: 24)
-                Text(label).font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.textLow)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.bgSurface.opacity(0.6)))
-        }
-        .buttonStyle(.plain)
     }
 
     private func saveBio() async {

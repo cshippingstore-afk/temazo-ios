@@ -14,6 +14,8 @@ struct PlayerState: Equatable {
     /// Usada por SourceRibbon para pintar el "brazalete TOP" en el cover.
     var source: String? = nil
     var shuffle: Bool = false
+    /// 0=OFF, 1=REPEAT_ALL (wrap al final), 2=REPEAT_ONE (repite canción actual)
+    var repeatMode: Int = 0
 }
 
 enum LoadingState: String, Equatable {

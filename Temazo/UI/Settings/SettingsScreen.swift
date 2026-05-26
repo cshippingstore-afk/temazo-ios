@@ -48,6 +48,38 @@ struct SettingsScreen: View {
                     if auth.currentUser != nil {
                         sectionTitle("Cuenta")
                         VStack(spacing: 0) {
+                            settingsRow(icon: "person.crop.circle.fill", label: "Editar perfil",
+                                        subtitle: "Bio, avatar y playlist destacada") {
+                                onClose()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                    NotificationCenter.default.post(name: .temazoOpenEditProfile, object: nil)
+                                }
+                            }
+                            Divider().background(Color.white.opacity(0.05))
+                            settingsRow(icon: "bell.fill", label: "Notificaciones",
+                                        subtitle: "Avisos por tipo (push e in-app)") {
+                                onClose()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                    NotificationCenter.default.post(name: .temazoOpenNotificationSettings, object: nil)
+                                }
+                            }
+                            Divider().background(Color.white.opacity(0.05))
+                            settingsRow(icon: "lock.shield.fill", label: "Privacidad",
+                                        subtitle: "Sesión privada, ocultar historial…") {
+                                onClose()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                    NotificationCenter.default.post(name: .temazoOpenPrivacy, object: nil)
+                                }
+                            }
+                            Divider().background(Color.white.opacity(0.05))
+                            settingsRow(icon: "square.and.arrow.down.fill", label: "Importaciones",
+                                        subtitle: "Solicitar artistas/canciones") {
+                                onClose()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                    NotificationCenter.default.post(name: .temazoOpenImports, object: nil)
+                                }
+                            }
+                            Divider().background(Color.white.opacity(0.05))
                             settingsRow(icon: "lock.fill", label: "Cambiar contraseña",
                                         subtitle: "Actualiza tu contraseña de acceso") {
                                 showPasswordChange = true

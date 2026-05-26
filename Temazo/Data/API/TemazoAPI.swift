@@ -629,6 +629,109 @@ final class TemazoAPI {
         return try await send(req, GenericResponse.self)
     }
 
+    // MARK: - Events (conciertos globales)
+    func eventsList(country: String? = nil, city: String? = nil, q: String? = nil, limit: Int = 60) async throws -> EventsListResponse {
+        let req = request("api/events_list.php",
+                          query: [
+                            "country": country,
+                            "city": city,
+                            "q": q,
+                            "limit": String(limit)
+                          ])
+        return try await send(req, EventsListResponse.self)
+    }
+
+    // MARK: - News (noticias)
+    func newsList(source: String? = nil, limit: Int = 30, offset: Int = 0) async throws -> NewsListResponse {
+        let req = request("api/news_list.php",
+                          query: [
+                            "source": source,
+                            "limit": String(limit),
+                            "offset": String(offset)
+                          ])
+        return try await send(req, NewsListResponse.self)
+    }
+
+    // MARK: - Perfil destacado / pinned playlist
+
+    @discardableResult
+    func userPinnedSet(playlistId: Int64) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "user_pinned_set"],
+                          method: "POST", form: ["playlist_id": String(playlistId)])
+        return try await send(req, GenericResponse.self)
+    }
+
+    // MARK: - Completar perfil tras login Google
+
+    @discardableResult
+    func profileComplete(username: String?, birthDate: String?, password: String?,
+                         gender: String? = nil, countryCode: String? = nil) async throws -> GenericResponse {
+        var form: [String: String] = [:]
+        if let u = username { form["username"] = u }
+        if let b = birthDate { form["birth_date"] = b }
+        if let p = password { form["password"] = p }
+        if let g = gender { form["gender"] = g }
+        if let cc = countryCode { form["country_code"] = cc }
+        let req = request("api/user_data.php", query: ["a": "profile_complete"],
+                          method: "POST", form: form)
+        return try await send(req, GenericResponse.self)
+    }
+
+    // MARK: - Imports (solicitudes de artistas/canciones)
+
+    func myImports() async throws -> MyImportsResponse {
+        let req = request("api/my_imports.php")
+        return try await send(req, MyImportsResponse.self)
+    }
+
+    @discardableResult
+    func requestImport(type: String, artistName: String, trackTitle: String? = nil) async throws -> ImportRequestResponse {
+        var form: [String: String] = ["type": type, "artist_name": artistName]
+        if let t = trackTitle { form["track_title"] = t }
+        let req = request("api/request_import.php", method: "POST", form: form)
+        return try await send(req, ImportRequestResponse.self)
+    }
+
+    // MARK: - Usuarios bloqueados (lista)
+
+    func usersBlocked() async throws -> UserListResponse {
+        let req = request("api/user_data.php", query: ["a": "users_blocked"])
+        return try await send(req, UserListResponse.self)
+    }
+
+    // MARK: - Notif prefs (push notifications settings)
+
+    func notifPrefsGet() async throws -> NotifPrefsResponse {
+        let req = request("api/user_data.php", query: ["a": "notif_prefs_get"])
+        return try await send(req, NotifPrefsResponse.self)
+    }
+
+    @discardableResult
+    func notifPrefsSet(kind: String, enabled: Bool) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "notif_prefs_set"],
+                          method: "POST",
+                          form: ["kind": kind, "enabled": enabled ? "1" : "0"])
+        return try await send(req, GenericResponse.self)
+    }
+
+    // MARK: - Push notifications (APNs token sync)
+    /// Registra el device token APNs en el backend. Backend espera `platform=apns` para iOS.
+    @discardableResult
+    func pushTokenSet(token: String, platform: String = "apns") async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "fcm_token_set"],
+                          method: "POST",
+                          form: ["token": token, "platform": platform])
+        return try await send(req, GenericResponse.self)
+    }
+
+    @discardableResult
+    func pushTokenDelete(token: String) async throws -> GenericResponse {
+        let req = request("api/user_data.php", query: ["a": "fcm_token_delete"],
+                          method: "POST",
+                          form: ["token": token])
+        return try await send(req, GenericResponse.self)
+    }
+
     // MARK: - Forgot password
     @discardableResult
     func forgotPassword(email: String) async throws -> GenericResponse {

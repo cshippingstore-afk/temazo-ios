@@ -16,10 +16,31 @@ enum Detail: Hashable {
     case usersFollowing(userId: Int64)
     case userSearch
     case recap
+    case events
+    case news
+    case editProfile
+    case imports
+    case playlistsFollowing
+    case blockedUsers
+    case privacy
+    case notificationSettings
 }
 
 extension Notification.Name {
     static let temazoSwitchToAccountTab = Notification.Name("temazoSwitchToAccountTab")
+    static let temazoOpenNotificationSettings = Notification.Name("temazoOpenNotificationSettings")
+    static let temazoOpenPrivacy = Notification.Name("temazoOpenPrivacy")
+    static let temazoOpenEditProfile = Notification.Name("temazoOpenEditProfile")
+    static let temazoOpenImports = Notification.Name("temazoOpenImports")
+    static let temazoOpenPlaylistsFollowing = Notification.Name("temazoOpenPlaylistsFollowing")
+    /// userInfo: ["username": String]
+    static let temazoOpenUserByUsername = Notification.Name("temazoOpenUserByUsername")
+    /// userInfo: ["playlistId": Int64]
+    static let temazoOpenPublicPlaylistById = Notification.Name("temazoOpenPublicPlaylistById")
+    /// userInfo: ["slug": String]
+    static let temazoOpenArtistBySlug = Notification.Name("temazoOpenArtistBySlug")
+    /// userInfo: ["slug": String]  (slug del álbum)
+    static let temazoOpenAlbumBySlug = Notification.Name("temazoOpenAlbumBySlug")
 }
 
 struct MainScreen: View {
@@ -28,6 +49,9 @@ struct MainScreen: View {
     @State private var fullPlayerShown: Bool = false
     @State private var addToPlaylistTrack: Track? = nil
     @State private var showLoadPlaylist: Bool = false
+    @State private var showCompleteProfile: Bool = false
+    @State private var completeProfileNeedsUsername: Bool = false
+    @State private var completeProfileNeedsBirthDate: Bool = false
     @State private var toastText: String? = nil
     @State private var showOnboarding: Bool = false
     @State private var recommendTrack: Track? = nil
@@ -53,7 +77,9 @@ struct MainScreen: View {
                         } else {
                             detailStack.append(.notifications)
                         }
-                    }
+                    },
+                    onEventsClick: { detailStack.append(.events) },
+                    onNewsClick: { detailStack.append(.news) }
                 )
                 ZStack {
                     if let last = detailStack.last {
@@ -194,6 +220,41 @@ struct MainScreen: View {
             // Mantener compatibilidad: si algo dispara este evento, abrir Account como detail.
             if !detailStack.contains(.account) { detailStack.append(.account) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenNotificationSettings)) { _ in
+            detailStack.append(.notificationSettings)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPrivacy)) { _ in
+            detailStack.append(.privacy)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenEditProfile)) { _ in
+            detailStack.append(.editProfile)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenImports)) { _ in
+            detailStack.append(.imports)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPlaylistsFollowing)) { _ in
+            detailStack.append(.playlistsFollowing)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenUserByUsername)) { notif in
+            if let username = notif.userInfo?["username"] as? String {
+                detailStack.append(.userPublic(id: nil, username: username))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenPublicPlaylistById)) { notif in
+            if let pid = notif.userInfo?["playlistId"] as? Int64 {
+                detailStack.append(.publicPlaylist(id: pid, slug: nil))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenArtistBySlug)) { notif in
+            if let slug = notif.userInfo?["slug"] as? String {
+                detailStack.append(.artist(id: nil, slug: slug, name: nil))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .temazoOpenAlbumBySlug)) { notif in
+            if let slug = notif.userInfo?["slug"] as? String {
+                detailStack.append(.album(id: nil, slug: slug))
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .temazoToastLoginRequired)) { _ in
             showToast("Inicia sesión para continuar")
             detailStack = [.account]
@@ -212,6 +273,14 @@ struct MainScreen: View {
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingScreen(onFinish: { showOnboarding = false })
         }
+        .fullScreenCover(isPresented: $showCompleteProfile) {
+            CompleteProfileScreen(
+                needsUsername: completeProfileNeedsUsername,
+                needsBirthDate: completeProfileNeedsBirthDate,
+                needsPassword: false,  // iOS no tiene Google OAuth todavía
+                onCompleted: { showCompleteProfile = false }
+            )
+        }
         .task {
             // TopTracksRepo + NotificationsRepo + NowPlayingHeartbeat: start una vez al abrir la app.
             TopTracksRepo.shared.start()
@@ -219,13 +288,24 @@ struct MainScreen: View {
             await auth.refreshSession()
             await syncFavs()
             await checkOnboarding()
-            if auth.currentUser != nil { NotificationsRepo.shared.start() }
+            await checkProfileCompleteness()
+            if auth.currentUser != nil {
+                NotificationsRepo.shared.start()
+                PushNotificationManager.shared.requestAuthorizationAndRegister()
+            }
         }
-        .onChange(of: auth.currentUser?.id) { _, _ in
+        .onChange(of: auth.currentUser?.id) { oldId, newId in
             Task {
                 await syncFavs()
+                await checkProfileCompleteness()
                 await checkOnboarding()
-                if auth.currentUser != nil { NotificationsRepo.shared.start() }
+                if auth.currentUser != nil {
+                    NotificationsRepo.shared.start()
+                    PushNotificationManager.shared.requestAuthorizationAndRegister()
+                } else if oldId != nil {
+                    // Logout: invalidar token APNs en backend
+                    PushNotificationManager.shared.unregister()
+                }
             }
         }
     }
@@ -238,6 +318,28 @@ struct MainScreen: View {
         } catch {
             // En caso de error, no forzar onboarding repetido.
             showOnboarding = false
+        }
+    }
+
+    /// Gate 1.5 — Detecta si el user necesita completar perfil (username/birth_date).
+    /// Equivalente del flow Android `CompleteProfileScreen`.
+    private func checkProfileCompleteness() async {
+        guard auth.currentUser != nil else { showCompleteProfile = false; return }
+        do {
+            let r = try await TemazoAPI.shared.profile()
+            let u = r.user
+            let needsUsername = (u?.username ?? "").isEmpty
+            let needsBirthDate = (u?.birthDate ?? "").isEmpty
+            if needsUsername || needsBirthDate {
+                completeProfileNeedsUsername = needsUsername
+                completeProfileNeedsBirthDate = needsBirthDate
+                showCompleteProfile = true
+            } else {
+                showCompleteProfile = false
+            }
+        } catch {
+            // Si falla, no bloquear al user.
+            showCompleteProfile = false
         }
     }
 
@@ -396,6 +498,98 @@ struct MainScreen: View {
                 kind: .search, userId: nil, initialQuery: nil,
                 onBack: { _ = detailStack.popLast() },
                 onOpen: { id, uname in detailStack.append(.userPublic(id: id, username: uname)) }
+            )
+        case .events:
+            EventosScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: {
+                    if auth.currentUser == nil {
+                        showToast("Inicia sesión para ver notificaciones")
+                    } else {
+                        detailStack.append(.notifications)
+                    }
+                },
+                onNewsClick: {
+                    _ = detailStack.popLast()
+                    detailStack.append(.news)
+                }
+            )
+        case .news:
+            NoticiasScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: {
+                    if auth.currentUser == nil {
+                        showToast("Inicia sesión para ver notificaciones")
+                    } else {
+                        detailStack.append(.notifications)
+                    }
+                },
+                onEventsClick: {
+                    _ = detailStack.popLast()
+                    detailStack.append(.events)
+                }
+            )
+        case .editProfile:
+            EditProfileScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: { detailStack.append(.notifications) },
+                onEventsClick: { detailStack.append(.events) },
+                onNewsClick: { detailStack.append(.news) }
+            )
+        case .imports:
+            ImportsScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: { detailStack.append(.notifications) },
+                onEventsClick: { detailStack.append(.events) },
+                onNewsClick: { detailStack.append(.news) },
+                onOpenUrl: { urlStr in
+                    if let url = URL(string: urlStr.hasPrefix("http") ? urlStr : "https://temazo.es\(urlStr)") {
+                        UIApplication.shared.open(url)
+                    }
+                }
+            )
+        case .playlistsFollowing:
+            PlaylistsFollowingScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: { detailStack.append(.notifications) },
+                onEventsClick: { detailStack.append(.events) },
+                onNewsClick: { detailStack.append(.news) },
+                onOpenPlaylist: { pid, slug in
+                    detailStack.append(.publicPlaylist(id: pid, slug: slug))
+                }
+            )
+        case .blockedUsers:
+            BlockedUsersScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: { detailStack.append(.notifications) },
+                onEventsClick: { detailStack.append(.events) },
+                onNewsClick: { detailStack.append(.news) },
+                onOpenUser: { id, uname in
+                    detailStack.append(.userPublic(id: id, username: uname))
+                }
+            )
+        case .privacy:
+            PrivacyScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: { detailStack.append(.notifications) },
+                onEventsClick: { detailStack.append(.events) },
+                onNewsClick: { detailStack.append(.news) },
+                onBlockedUsers: { detailStack.append(.blockedUsers) }
+            )
+        case .notificationSettings:
+            NotificationSettingsScreen(
+                onBack: { _ = detailStack.popLast() },
+                onAvatarClick: { detailStack.append(.account) },
+                onBellClick: { detailStack.append(.notifications) },
+                onEventsClick: { detailStack.append(.events) },
+                onNewsClick: { detailStack.append(.news) }
             )
         }
     }

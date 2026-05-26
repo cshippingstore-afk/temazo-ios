@@ -42,6 +42,7 @@ targets:
         SWIFT_EMIT_LOC_STRINGS: YES
         INFOPLIST_FILE: Temazo/Info.plist
         GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Temazo/Temazo.entitlements
       configs:
         Release:
           CODE_SIGN_STYLE: Manual

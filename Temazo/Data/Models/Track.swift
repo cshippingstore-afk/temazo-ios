@@ -110,12 +110,14 @@ struct Playlist: Codable, Identifiable, Hashable {
     let previewCover: String?
     let trackCount: Int?
     let isLikedDefault: Bool?
+    let isPublic: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, slug, description, cover
         case previewCover = "preview_cover"
         case trackCount = "track_count"
         case isLikedDefault = "is_liked_default"
+        case isPublic = "is_public"
     }
 
     init(from decoder: Decoder) throws {
@@ -136,6 +138,11 @@ struct Playlist: Codable, Identifiable, Hashable {
         } else if let i = try? c.decode(Int.self, forKey: .isLikedDefault) {
             isLikedDefault = i != 0
         } else { isLikedDefault = nil }
+        if let b = try? c.decode(Bool.self, forKey: .isPublic) {
+            isPublic = b
+        } else if let i = try? c.decode(Int.self, forKey: .isPublic) {
+            isPublic = i != 0
+        } else { isPublic = nil }
     }
 
     /// URL absoluta de la cover (cover propio si existe, si no la del primer track),

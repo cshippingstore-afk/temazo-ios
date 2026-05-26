@@ -22,6 +22,17 @@ struct TemazoApp: App {
                     NowPlayingManager.shared.bind(to: player)
                     await auth.refreshSession()
                 }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    // Universal Link: alguien abrió un enlace temazo.es y la app
+                    // está registrada para esos dominios via apple-app-site-association.
+                    if let url = activity.webpageURL {
+                        DeepLinkRouter.handle(url: url)
+                    }
+                }
+                .onOpenURL { url in
+                    // Custom URL scheme (si en el futuro añadimos temazo://)
+                    DeepLinkRouter.handle(url: url)
+                }
         }
     }
 }
@@ -48,5 +59,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             print("[TemazoCrash]", msg)
         }
         return true
+    }
+
+    // MARK: - APNs token
+
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in
+            PushNotificationManager.shared.register(deviceToken: deviceToken)
+        }
+    }
+
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Task { @MainActor in
+            PushNotificationManager.shared.registrationFailed(error: error)
+        }
     }
 }

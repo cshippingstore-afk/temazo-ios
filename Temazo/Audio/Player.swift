@@ -52,6 +52,11 @@ final class Player: NSObject, ObservableObject {
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
+    /// Cicla repeat: OFF → REPEAT_ALL → REPEAT_ONE → OFF
+    func toggleRepeat() {
+        state.repeatMode = (state.repeatMode + 1) % 3
+    }
+
     /// Toggle shuffle. Reordena la cola en sitio (sin parar la reproducción actual).
     func toggleShuffle() {
         state.shuffle.toggle()
@@ -87,6 +92,28 @@ final class Player: NSObject, ObservableObject {
 
     func next() {
         guard !state.queue.isEmpty else { return }
+
+        // REPEAT_ONE: recargar misma canción
+        if state.repeatMode == 2, state.index >= 0, state.index < state.queue.count {
+            let t = state.queue[state.index]
+            state.currentTrack = t
+            state.positionSec = 0
+            state.durationSec = Float(t.durationSec ?? 0)
+            state.loadingState = .extracting
+            didAutoNext = false
+            startAVPlayback(for: t)
+            Task { try? await TemazoAPI.shared.historyAdd(t.id) }
+            return
+        }
+
+        let atEnd = (state.index + 1) >= state.queue.count
+        // OFF: al final de la cola, parar (no wrap)
+        if state.repeatMode == 0, atEnd {
+            pause()
+            state.positionSec = 0
+            return
+        }
+
         let nextIdx = (state.index + 1) % state.queue.count
         let t = state.queue[nextIdx]
         state.index = nextIdx
