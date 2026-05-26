@@ -7,7 +7,7 @@
 		<string>applinks:temazo.es</string>
 		<string>applinks:www.temazo.es</string>
 	</array>
-	<key>aps-environment</key>
-	<string>development</string>
+	<!-- aps-environment se añade en v2.19 cuando se active capability Push Notifications
+	     en App ID es.temazo.app + regenerar provisioning profile -->
 </dict>
 </plist>
