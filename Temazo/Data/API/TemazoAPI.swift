@@ -277,6 +277,11 @@ final class TemazoAPI {
     }
 
     func avatarUpload(imageData: Data, mime: String) async throws -> AvatarUploadResponse {
+        // Garantizar CSRF token antes de write action — sin esto el backend rechaza
+        // con error de auth y el upload falla silenciosamente (bug v2.22: avatar
+        // no se subía si el user llevaba tiempo sin login fresh).
+        if csrfToken == nil { _ = try? await session() }
+
         let boundary = "tmz-\(UUID().uuidString)"
         var comps = URLComponents(url: baseURL.appendingPathComponent("api/user_data.php"), resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "a", value: "avatar_upload")]
@@ -299,12 +304,14 @@ final class TemazoAPI {
 
     @discardableResult
     func avatarDelete() async throws -> GenericResponse {
+        if csrfToken == nil { _ = try? await session() }
         let req = request("api/user_data.php", query: ["a": "avatar_delete"], method: "POST")
         return try await send(req, GenericResponse.self)
     }
 
     @discardableResult
     func usernameSet(_ username: String) async throws -> UsernameResponse {
+        if csrfToken == nil { _ = try? await session() }
         let req = request("api/user_data.php", query: ["a": "username_set"],
                           method: "POST", form: ["username": username])
         return try await send(req, UsernameResponse.self)
@@ -477,6 +484,7 @@ final class TemazoAPI {
 
     @discardableResult
     func userBioSet(_ bio: String) async throws -> UserBioResponse {
+        if csrfToken == nil { _ = try? await session() }
         let req = request("api/user_data.php", query: ["a": "user_bio_set"],
                           method: "POST", form: ["bio": bio])
         return try await send(req, UserBioResponse.self)
@@ -489,6 +497,7 @@ final class TemazoAPI {
 
     @discardableResult
     func userPrivacySet(hideNowPlaying: Bool, hideHistory: Bool, privateSession: Bool) async throws -> UserPrivacyResponse {
+        if csrfToken == nil { _ = try? await session() }
         let req = request("api/user_data.php", query: ["a": "user_privacy_set"],
                           method: "POST",
                           form: ["hide_now_playing": hideNowPlaying ? "1" : "0",
@@ -656,6 +665,7 @@ final class TemazoAPI {
 
     @discardableResult
     func userPinnedSet(playlistId: Int64) async throws -> GenericResponse {
+        if csrfToken == nil { _ = try? await session() }
         let req = request("api/user_data.php", query: ["a": "user_pinned_set"],
                           method: "POST", form: ["playlist_id": String(playlistId)])
         return try await send(req, GenericResponse.self)

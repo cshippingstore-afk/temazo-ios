@@ -48,7 +48,11 @@ final class Player: NSObject, ObservableObject {
                 self.state.loadingState = .playing
                 self.didAutoNext = false
                 AudioSessionManager.shared.ensureActive()
-                AudioSessionManager.shared.startSilentLoop()
+                // NO arrancar silent loop con WKWebView — el AVAudioPlayer del silent
+                // loop TOMA el output de audio del proceso y el iframe se queda sin
+                // poder reproducir (bug "se escucha 1 seg y se para"). Android no usa
+                // silent loop porque su WebView mantiene el audio nativamente.
+                // El AudioSession .playback ya basta para background audio con WKWebView.
             case "paused":
                 self.state.isPlaying = false
             case "buffering":
