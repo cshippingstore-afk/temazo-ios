@@ -19,23 +19,28 @@ final class AudioSessionManager {
     func configure() {
         guard !configured else { return }
         configured = true
-        // v2.35: el conflicto que vimos en v2.33 (CMSessionMgr cmsInterruptSession
-        // Temazo INTERRUPTING WebKit fade 0.7s) NO era por estar activos los dos;
-        // era por estarlo en modo EXCLUSIVO. .playback sin .mixWithOthers reclama
-        // exclusividad → iOS apaga al "otro" con fade.
+        // v2.36: re-análisis del log original CMSessionMgr.
+        //   .mixWithOthers (v2.35) le dice a iOS "no somos el audio primario"
+        //   → bloqueo de pantalla suspende todo el proceso.
+        //   .playback exclusivo (v2.33) sí da background, pero v2.33 también
+        //   llamaba setActive(true) en 4 sitios diferentes durante el play.
+        //   CADA setActive(true) = un evento "re-claim audio focus" → iOS
+        //   dispara cmsInterruptSession contra cualquier session secundaria
+        //   (incluida la del WKWebView en pid distinto) → fade 0.7s.
         //
-        // FIX: mantener nuestra session activa (necesaria para que el silent loop
-        // funcione y el audio sobreviva al bloqueo de pantalla) PERO con
-        // .mixWithOthers → ambas sessions coexisten sin interrupción.
+        // Fix v2.36: .playback EXCLUSIVO (background mode OK) + setActive
+        // UNA SOLA VEZ al arranque, y NUNCA más. ensureActive() neutralizado.
+        // WebKit creará su session DESPUÉS, sin que la nuestra se reactive
+        // jamás → cero cmsInterruptSession contra WebKit.
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(
                 .playback,
                 mode: .moviePlayback,
-                options: [.mixWithOthers, .allowAirPlay, .allowBluetoothA2DP]
+                options: [.allowAirPlay, .allowBluetoothA2DP]
             )
             try session.setActive(true, options: [])
-            print("[AudioSession] active+mixWithOthers (coexiste con WebKit sin interrumpirla)")
+            print("[AudioSession] active+exclusive (setActive una vez, jamás re-llamado)")
         } catch {
             print("[AudioSession] configure error: \(error)")
         }
@@ -72,12 +77,11 @@ final class AudioSessionManager {
         }
     }
 
-    /// v2.35: re-activado. Con .mixWithOthers (ver configure()) reactivar nuestra
-    /// session NO interrumpe la del WebKit — ambas coexisten. Necesario para que
-    /// el silent loop siga sirviendo audio "real" cuando la pantalla se bloquea.
+    /// v2.36: NO-OP definitivo. setActive solo se llama una vez en configure()
+    /// al arranque de la app. Llamadas legacy no rompen pero NO re-activan
+    /// → cero cmsInterruptSession contra la session del WKWebView.
     func ensureActive() {
-        do { try AVAudioSession.sharedInstance().setActive(true, options: []) }
-        catch { print("[AudioSession] ensureActive error: \(error)") }
+        // Intencionalmente vacío. Ver configure() para context completo.
     }
 
     /// Arranca un loop silencioso con AVAudioPlayer para mantener la AVAudioSession
@@ -139,7 +143,12 @@ final class AudioSessionManager {
             if let optsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
                 if opts.contains(.shouldResume) {
-                    ensureActive()
+                    // Único punto donde re-activamos: después de una interrupción
+                    // REAL de iOS (llamada, Siri, etc.) — iOS desactivó nuestra
+                    // session, hay que re-activarla. Aquí WebKit ya estaba en
+                    // pausa, así que el interrupt log no es problema.
+                    do { try AVAudioSession.sharedInstance().setActive(true, options: []) }
+                    catch { print("[AudioSession] reactivate err: \(error)") }
                     Task { @MainActor in Player.shared.resume() }
                 }
             }
