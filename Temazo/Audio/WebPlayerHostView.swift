@@ -8,9 +8,12 @@ import WebKit
 /// Se monta en MainScreen al inicio del ZStack, oculto detrás de toda la UI.
 struct WebPlayerHostView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
-        let container = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        // Tamaño 4×4 px (no 1×1) — iOS considera "hidden" los WebViews de 1px
+        // y pausa el audio. 4×4 es el mínimo seguro que mantiene la reproducción.
+        // alpha 0.01 lo hace prácticamente invisible al ojo humano.
+        let container = UIView(frame: CGRect(x: 0, y: 0, width: 4, height: 4))
         container.isUserInteractionEnabled = false
-        container.alpha = 0.01           // casi invisible pero no fully transparent
+        container.alpha = 0.01
         container.backgroundColor = .clear
         container.clipsToBounds = true
 

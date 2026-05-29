@@ -74,19 +74,26 @@ final class WebPlayerEngine: NSObject {
 
     func play(videoId: String) {
         pendingPlayVideoId = videoId
+        let safeId = videoId.replacingOccurrences(of: "'", with: "")
         if pageLoaded && playerReady {
-            let safeId = videoId.replacingOccurrences(of: "'", with: "")
             webView.evaluateJavaScript("tmzLoad('\(safeId)')") { _, err in
                 if let err = err { print("[WebPlayer] tmzLoad err: \(err)") }
             }
+            // Retry explícito a los 500ms — iOS suele pausar el iframe a los ~1s
+            // tras el primer play por política autoplay del WebView. Llamamos
+            // ensurePlayingAndUnmuted desde Swift para forzar reanudación.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                self?.webView.evaluateJavaScript("ensurePlayingAndUnmuted()", completionHandler: nil)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self?.webView.evaluateJavaScript("ensurePlayingAndUnmuted()", completionHandler: nil)
+            }
         } else {
             // Si la página aún no terminó de cargar, recárgala con ?v= para arrancar
-            // directamente con el video correcto.
+            // directamente con el video correcto. SIN cache-bust (?t=) — eso forzaba
+            // re-download de la página entera anulando el pre-warm = primer play lento.
             var comps = URLComponents(string: Self.playerURL)!
-            comps.queryItems = [
-                URLQueryItem(name: "v", value: videoId),
-                URLQueryItem(name: "t", value: String(Int(Date().timeIntervalSince1970)))
-            ]
+            comps.queryItems = [URLQueryItem(name: "v", value: safeId)]
             webView.load(URLRequest(url: comps.url!))
         }
     }
@@ -170,6 +177,18 @@ extension WebPlayerEngine: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pageLoaded = true
         print("[WebPlayer] page loaded")
+        // Inyectar user gesture sintético en el WebView — iOS requiere que el
+        // primer audio venga de un gesture "del usuario dentro del WebView".
+        // El gesture de un SwiftUI Button NO cuenta. Sin esto, el iframe se
+        // pausa cada ~1s aunque mediaTypesRequiringUserActionForPlayback=[].
+        // El click() dispara el handler del HTML que ya tiene ensurePlayingAndUnmuted.
+        let js = """
+        try {
+          var ev = new MouseEvent('click', {bubbles: true, cancelable: true});
+          document.body.dispatchEvent(ev);
+        } catch(_) {}
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

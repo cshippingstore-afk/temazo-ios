@@ -66,11 +66,12 @@ struct MainScreen: View {
         ZStack {
             AnimatedNeonBackground()
 
-            // WebPlayer host: WebView 1×1 px del WebPlayerEngine anclado al window.
-            // Sin esto, iOS pausa el JS del iframe YouTube cuando la app va a
-            // background. Va al fondo del ZStack, invisible.
+            // WebPlayer host: WebView 4×4 px del WebPlayerEngine anclado al window.
+            // Sin esto, iOS pausa el JS del iframe YouTube. Va al fondo del ZStack,
+            // casi invisible (alpha 0.01) pero con tamaño suficiente para que iOS
+            // no lo considere "hidden" (1px hace que iOS pause el audio).
             WebPlayerHostView()
-                .frame(width: 1, height: 1)
+                .frame(width: 4, height: 4)
                 .allowsHitTesting(false)
 
             VStack(spacing: 0) {
