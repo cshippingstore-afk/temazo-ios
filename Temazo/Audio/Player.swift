@@ -52,20 +52,17 @@ final class Player: NSObject, ObservableObject {
                 // tomaba el output de audio del proceso y dejaba al iframe sin sonido
                 // ("audio se escuchaba 1 seg y se paraba" v2.21-v2.25).
             case "paused":
-                // v2.28: iOS pausa el iframe automáticamente aunque esté en UIWindow
-                // secundario. Si el state.isPlaying era TRUE (el user NO ha pulsado
-                // pause), entonces fue iOS — forzamos resume inmediato + retry.
-                // Solo respetamos la pausa real si state.isPlaying ya estaba false
-                // (significa que el user pulsó pause y el iframe respondió OK).
-                if self.state.isPlaying {
-                    print("[Player] iframe paused inesperadamente — force resume")
-                    Task { @MainActor [weak self] in
-                        // Pequeño delay para no entrar en un play-pause-play loop
-                        try? await Task.sleep(nanoseconds: 100_000_000)
-                        self?.engine.resume()
-                    }
+                // v2.29: el watchdog JS dentro del iframe (cycle 250ms) detecta
+                // y revierte las pausas falsas de iOS sin round-trip a Swift.
+                // Aquí solo reflejamos el state. Si fue pausa real (user pulsó
+                // pause), el watchdog NO interferirá porque tmzPause() ya puso
+                // shouldBePlaying=false antes de llamar pauseVideo().
+                if !self.state.isPlaying {
+                    // pausa real del user
                 } else {
-                    self.state.isPlaying = false
+                    // pausa de iOS — el watchdog JS la revertirá; NO cambiamos
+                    // state.isPlaying para que la UI no parpadee.
+                    print("[Player] iframe paused (probable iOS auto-pause) — watchdog JS recuperará")
                 }
             case "buffering":
                 self.state.loadingState = .extracting
