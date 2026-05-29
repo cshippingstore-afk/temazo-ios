@@ -66,14 +66,6 @@ struct MainScreen: View {
         ZStack {
             AnimatedNeonBackground()
 
-            // WebPlayer host: WebView 4×4 px del WebPlayerEngine anclado al window.
-            // Sin esto, iOS pausa el JS del iframe YouTube. Va al fondo del ZStack,
-            // casi invisible (alpha 0.01) pero con tamaño suficiente para que iOS
-            // no lo considere "hidden" (1px hace que iOS pause el audio).
-            WebPlayerHostView()
-                .frame(width: 4, height: 4)
-                .allowsHitTesting(false)
-
             VStack(spacing: 0) {
                 TemazoTopBar(
                     isPlaying: player.state.isPlaying,
