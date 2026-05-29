@@ -69,6 +69,8 @@ final class WebPlayerEngine: NSObject {
         webView.scrollView.isScrollEnabled = false
         webView.allowsBackForwardNavigationGestures = false
         webView.navigationDelegate = self
+        // iOS 16.4+: opt-in explícito a Safari Web Inspector. Necesario para debug.
+        if #available(iOS 16.4, *) { webView.isInspectable = true }
     }
 
     /// Crea un UIWindow secundario invisible y monta el WebView ahí.
