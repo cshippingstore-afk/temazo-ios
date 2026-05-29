@@ -26,11 +26,94 @@ final class Player: NSObject, ObservableObject {
     private var didAutoNext: Bool = false
     private var crossfadeMs: Int = 250
 
+    /// v2.39: Hybrid background switcher.
+    /// WKWebView no sobrevive al lock screen porque iOS suspende el proceso
+    /// WebKit (PID distinto). Cuando la app entra background CON música
+    /// reproduciendo, traspasamos el audio al AVPlayer streaming via
+    /// temazo.es/api/yt_proxy.php — AVPlayer SÍ aguanta lock porque es la
+    /// arquitectura nativa iOS para background audio (UIBackgroundModes audio).
+    /// Al volver a foreground, traspasamos de vuelta al iframe.
+    private var bgAVPlayer: AVPlayer?
+    private var bgTimeObs: Any?
+    private var bgEndObs: NSObjectProtocol?
+    /// true mientras estamos reproduciendo via bgAVPlayer (background mode)
+    private var inBackgroundPlayback: Bool = false
+
     override init() {
         super.init()
         UIApplication.shared.beginReceivingRemoteControlEvents()
         AudioSessionManager.shared.ensureActive()
         wireEngine()
+        // v2.39: observers del lifecycle para hybrid switcher
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleEnteredBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
+
+    // MARK: - v2.39 Hybrid Background Switcher
+
+    @objc private func handleEnteredBackground() {
+        // Solo activamos el switch si HAY música sonando
+        guard state.isPlaying, let track = state.currentTrack,
+              let ytId = track.youtubeId, !ytId.isEmpty else {
+            print("[Player] background: nada que reproducir, skip switch")
+            return
+        }
+        let currentPos = state.positionSec
+        print("[Player] background → switching iframe → AVPlayer en pos=\(currentPos)")
+        // Pausa el iframe (WebKit se va a suspender de todos modos al bloquear)
+        engine.pause()
+        // Arranca AVPlayer con el proxy
+        let urlStr = "https://temazo.es/api/yt_proxy.php?id=\(ytId)"
+        guard let url = URL(string: urlStr) else { return }
+        let item = AVPlayerItem(url: url)
+        let avp = AVPlayer(playerItem: item)
+        avp.automaticallyWaitsToMinimizeStalling = false
+        // Seek al punto donde estábamos en el iframe
+        if currentPos > 1 {
+            let cm = CMTime(seconds: Double(currentPos), preferredTimescale: 600)
+            avp.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                avp.play()
+            }
+        } else {
+            avp.play()
+        }
+        // Position updates desde AVPlayer durante background
+        bgTimeObs = avp.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] t in
+            guard let self else { return }
+            self.state.positionSec = Float(t.seconds)
+        }
+        // Auto-next al terminar
+        bgEndObs = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.next() }
+        }
+        bgAVPlayer = avp
+        inBackgroundPlayback = true
+    }
+
+    @objc private func handleWillEnterForeground() {
+        guard inBackgroundPlayback, let avp = bgAVPlayer else { return }
+        let pos = Float(avp.currentTime().seconds)
+        print("[Player] foreground → switching AVPlayer → iframe en pos=\(pos)")
+        // Cleanup AVPlayer
+        if let obs = bgTimeObs { avp.removeTimeObserver(obs); bgTimeObs = nil }
+        if let obs = bgEndObs { NotificationCenter.default.removeObserver(obs); bgEndObs = nil }
+        avp.pause()
+        avp.replaceCurrentItem(with: nil)
+        bgAVPlayer = nil
+        inBackgroundPlayback = false
+        // Re-seek + resume iframe en la posición exacta
+        if pos > 1 { engine.seek(toSec: pos) }
+        engine.resume()
+        state.positionSec = pos
     }
 
     private func wireEngine() {
@@ -119,14 +202,37 @@ final class Player: NSObject, ObservableObject {
         state.loadingState = .extracting
         didAutoNext = false
         AudioSessionManager.shared.ensureActive()
-        if let ytId = track.youtubeId, !ytId.isEmpty {
-            engine.play(videoId: ytId)
-            state.isPlaying = true
-        } else {
+        startCurrentTrack()
+        Task { try? await TemazoAPI.shared.historyAdd(track.id) }
+    }
+
+    /// v2.39: arranca el track actual en el engine ACTIVO (iframe o AVPlayer
+    /// según estemos en foreground o background).
+    private func startCurrentTrack() {
+        guard let track = state.currentTrack,
+              let ytId = track.youtubeId, !ytId.isEmpty else {
             state.lastError = "no youtubeId"
             state.loadingState = .failed
+            return
         }
-        Task { try? await TemazoAPI.shared.historyAdd(track.id) }
+        if inBackgroundPlayback {
+            // En background: swap del AVPlayerItem
+            let urlStr = "https://temazo.es/api/yt_proxy.php?id=\(ytId)"
+            guard let url = URL(string: urlStr), let avp = bgAVPlayer else { return }
+            // Cleanup observer del item anterior
+            if let obs = bgEndObs { NotificationCenter.default.removeObserver(obs); bgEndObs = nil }
+            let item = AVPlayerItem(url: url)
+            avp.replaceCurrentItem(with: item)
+            avp.play()
+            bgEndObs = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.next() }
+            }
+        } else {
+            engine.play(videoId: ytId)
+        }
+        state.isPlaying = true
     }
 
     /// Cicla repeat: OFF → REPEAT_ALL → REPEAT_ONE → OFF
@@ -151,19 +257,23 @@ final class Player: NSObject, ObservableObject {
 
     func resume() {
         AudioSessionManager.shared.ensureActive()
-        // PRIMERO marcamos state.isPlaying=true para que el callback "playing"
-        // del iframe no haga nada raro.
         state.isPlaying = true
-        engine.resume()
+        if inBackgroundPlayback {
+            bgAVPlayer?.play()
+        } else {
+            engine.resume()
+        }
     }
 
     func pause() {
         print("[Player] pause() called")
-        // PRIMERO state.isPlaying=false → el handler "paused" del iframe
-        // verá isPlaying=false y NO hará force-resume (sabrá que fue user pause).
         state.isPlaying = false
-        engine.pause()
-        AudioSessionManager.shared.stopSilentLoop()
+        if inBackgroundPlayback {
+            bgAVPlayer?.pause()
+        } else {
+            engine.pause()
+            AudioSessionManager.shared.stopSilentLoop()
+        }
     }
 
     /// Añade un track al final de la cola actual sin interrumpir reproducción.
@@ -183,10 +293,7 @@ final class Player: NSObject, ObservableObject {
             state.durationSec = Float(t.durationSec ?? 0)
             state.loadingState = .extracting
             didAutoNext = false
-            if let ytId = t.youtubeId, !ytId.isEmpty {
-                engine.play(videoId: ytId)
-                state.isPlaying = true
-            }
+            startCurrentTrack()
             Task { try? await TemazoAPI.shared.historyAdd(t.id) }
             return
         }
@@ -207,10 +314,7 @@ final class Player: NSObject, ObservableObject {
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
         didAutoNext = false
-        if let ytId = t.youtubeId, !ytId.isEmpty {
-            engine.play(videoId: ytId)
-            state.isPlaying = true
-        }
+        startCurrentTrack()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
@@ -224,15 +328,17 @@ final class Player: NSObject, ObservableObject {
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
         didAutoNext = false
-        if let ytId = t.youtubeId, !ytId.isEmpty {
-            engine.play(videoId: ytId)
-            state.isPlaying = true
-        }
+        startCurrentTrack()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
     }
 
     func seekTo(seconds: Float) {
-        engine.seek(toSec: seconds)
+        if inBackgroundPlayback, let avp = bgAVPlayer {
+            let cm = CMTime(seconds: Double(seconds), preferredTimescale: 600)
+            avp.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
+        } else {
+            engine.seek(toSec: seconds)
+        }
         state.positionSec = seconds
     }
 
