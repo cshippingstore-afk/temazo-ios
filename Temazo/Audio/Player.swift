@@ -48,9 +48,11 @@ final class Player: NSObject, ObservableObject {
                 self.state.loadingState = .playing
                 self.didAutoNext = false
                 AudioSessionManager.shared.ensureActive()
-                // NO startSilentLoop con WKWebView — el AVAudioPlayer del silent loop
-                // tomaba el output de audio del proceso y dejaba al iframe sin sonido
-                // ("audio se escuchaba 1 seg y se paraba" v2.21-v2.25).
+                // v2.35: silent loop reactivado. Con .mixWithOthers (configure()),
+                // el AVAudioPlayer silencioso a 0.05 NO le roba el output al iframe
+                // — coexisten. Sin él, iOS suspende el WKWebView al bloquear pantalla
+                // porque considera que el proceso no produce audio "real".
+                AudioSessionManager.shared.startSilentLoop()
             case "paused":
                 // v2.29: el watchdog JS dentro del iframe (cycle 250ms) detecta
                 // y revierte las pausas falsas de iOS sin round-trip a Swift.
@@ -161,6 +163,7 @@ final class Player: NSObject, ObservableObject {
         // verá isPlaying=false y NO hará force-resume (sabrá que fue user pause).
         state.isPlaying = false
         engine.pause()
+        AudioSessionManager.shared.stopSilentLoop()
     }
 
     /// Añade un track al final de la cola actual sin interrumpir reproducción.
