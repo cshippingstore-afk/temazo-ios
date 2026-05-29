@@ -4,22 +4,20 @@ import UIKit
 import AVFoundation
 
 /// Motor de reproducción basado en WKWebView + YouTube IFrame Player API.
-/// Réplica EXACTA del Android Player.kt (que reproduce sin lag ni rate-limit).
+/// Réplica EXACTA del Android Player.kt (que reproduce sin lag ni rate-limit):
+///
+///   - Android: el WebView se ata al WindowManager del sistema en una ventana
+///     SYSTEM_ALERT_WINDOW 1×1 px → fuera de la jerarquía normal de la app
+///     → audio sigue corriendo en background.
+///
+///   - iOS equivalente: el WebView vive en un UIWindow SECUNDARIO (NO en la
+///     jerarquía SwiftUI normal). El UIWindow tiene tamaño 1×1 px, alpha 0.01,
+///     userInteractionEnabled=false. iOS trata este UIWindow como "ventana de
+///     sistema" no como "view de la app" → no aplica autoplay pause.
 ///
 /// Por qué esto evita el throttle del proxy temazo.es/api/yt_proxy.php:
 /// el iframe oficial de YouTube descarga el mp4 directamente desde googlevideo
-/// usando la IP del **dispositivo del user**, no la del VPS. Así YouTube ve
-/// millones de IPs distintas (tráfico legítimo) en lugar de UNA IP del VPS
-/// haciendo miles de requests/día (que YouTube throttlea a 29 KB/s).
-///
-/// Para que el audio siga sonando en background:
-///   - AVAudioSession .playback activa (AudioSessionManager.configure)
-///   - WKWebView debe estar en la jerarquía de UIWindow (vía WebPlayerHostView).
-///     Si NO está, iOS pausa el JS del WebView en background.
-///   - Info.plist UIBackgroundModes incluye "audio"
-///   - allowsInlineMediaPlayback = true, mediaTypesRequiringUserActionForPlayback = []
-///   - Silent audio loop (AudioSessionManager.startSilentLoop) firma "estoy
-///     produciendo audio" mientras el iframe sigue corriendo.
+/// usando la IP del **dispositivo del user**, no la del VPS.
 @MainActor
 final class WebPlayerEngine: NSObject {
     static let shared = WebPlayerEngine()
@@ -35,15 +33,20 @@ final class WebPlayerEngine: NSObject {
     private var pollTimer: Timer?
     private var pendingPlayVideoId: String?
 
+    /// UIWindow secundario invisible que aloja el WebView fuera de la jerarquía
+    /// SwiftUI. Equivalente iOS al WindowManager de Android.
+    private var hostWindow: UIWindow?
+
     // Callbacks que Player.swift consume
     var onReady: (() -> Void)?
-    var onStateChange: ((String, Int) -> Void)?   // ("playing", 1) | ("ended", 0) | ...
+    var onStateChange: ((String, Int) -> Void)?
     var onError: ((Int) -> Void)?
-    var onTime: ((Float, Float) -> Void)?          // (positionSec, durationSec)
+    var onTime: ((Float, Float) -> Void)?
 
     override init() {
         super.init()
         setupWebView()
+        mountWebViewInSecondaryWindow()
         // Pre-warm: carga la página sin video al arrancar la app. El primer play
         // sólo necesita tmzLoad (50-100ms) en vez de full page load (1-2s).
         let url = URL(string: Self.playerURL)!
@@ -56,7 +59,6 @@ final class WebPlayerEngine: NSObject {
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.allowsPictureInPictureMediaPlayback = false
         cfg.processPool = WKProcessPool()
-        // El user content controller recibe los mensajes desde JS (sendIOS).
         let ucc = WKUserContentController()
         ucc.add(self, name: "player")
         cfg.userContentController = ucc
@@ -67,7 +69,62 @@ final class WebPlayerEngine: NSObject {
         webView.scrollView.isScrollEnabled = false
         webView.allowsBackForwardNavigationGestures = false
         webView.navigationDelegate = self
-        // Audio del WebView va al output del AVAudioSession → background works
+    }
+
+    /// Crea un UIWindow secundario invisible y monta el WebView ahí.
+    /// Equivalente iOS al WindowManager.addView() de Android con SYSTEM_ALERT_WINDOW.
+    /// El UIWindow está fuera de la jerarquía SwiftUI → iOS NO aplica la autoplay
+    /// pause policy que afecta a WebViews "huérfanos" dentro de UIWindow main.
+    private func mountWebViewInSecondaryWindow() {
+        // Necesitamos esperar a que haya un WindowScene activo. Si el engine se
+        // instancia ANTES de que la app esté en foreground, hay que retry.
+        if !attachToScene() {
+            // Reintenta tras 200ms si aún no hay scene
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                _ = self.attachToScene()
+            }
+        }
+    }
+
+    @discardableResult
+    private func attachToScene() -> Bool {
+        guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive })
+        else {
+            print("[WebPlayer] no foreground UIWindowScene yet, retrying...")
+            return false
+        }
+
+        let window = UIWindow(windowScene: scene)
+        // windowLevel alto = encima de todo, pero alpha 0.01 + 1x1 = invisible
+        window.windowLevel = UIWindow.Level.alert + 1
+        window.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        window.alpha = 0.01
+        window.isUserInteractionEnabled = false
+        window.backgroundColor = .clear
+        window.isHidden = false
+
+        let vc = UIViewController()
+        vc.view.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        vc.view.backgroundColor = .clear
+        vc.view.isUserInteractionEnabled = false
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        vc.view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: vc.view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: vc.view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: vc.view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: vc.view.bottomAnchor),
+        ])
+
+        window.rootViewController = vc
+        // NO makeKeyAndVisible — el UIWindow principal de SwiftUI sigue siendo key.
+        // Solo lo hacemos visible.
+        self.hostWindow = window
+        print("[WebPlayer] WebView mounted in secondary UIWindow (alpha 0.01, level=alert+1)")
+        return true
     }
 
     // MARK: - Public API (consumida por Player.swift)
@@ -79,9 +136,8 @@ final class WebPlayerEngine: NSObject {
             webView.evaluateJavaScript("tmzLoad('\(safeId)')") { _, err in
                 if let err = err { print("[WebPlayer] tmzLoad err: \(err)") }
             }
-            // Retry explícito a los 500ms — iOS suele pausar el iframe a los ~1s
-            // tras el primer play por política autoplay del WebView. Llamamos
-            // ensurePlayingAndUnmuted desde Swift para forzar reanudación.
+            // Retry explícito de play tras 500ms y 2000ms (red de seguridad por si
+            // iOS pausa el iframe automáticamente).
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 self?.webView.evaluateJavaScript("ensurePlayingAndUnmuted()", completionHandler: nil)
@@ -90,8 +146,7 @@ final class WebPlayerEngine: NSObject {
             }
         } else {
             // Si la página aún no terminó de cargar, recárgala con ?v= para arrancar
-            // directamente con el video correcto. SIN cache-bust (?t=) — eso forzaba
-            // re-download de la página entera anulando el pre-warm = primer play lento.
+            // directamente con el video correcto. SIN cache-bust = reutiliza pre-warm.
             var comps = URLComponents(string: Self.playerURL)!
             comps.queryItems = [URLQueryItem(name: "v", value: safeId)]
             webView.load(URLRequest(url: comps.url!))
@@ -179,9 +234,6 @@ extension WebPlayerEngine: WKNavigationDelegate {
         print("[WebPlayer] page loaded")
         // Inyectar user gesture sintético en el WebView — iOS requiere que el
         // primer audio venga de un gesture "del usuario dentro del WebView".
-        // El gesture de un SwiftUI Button NO cuenta. Sin esto, el iframe se
-        // pausa cada ~1s aunque mediaTypesRequiringUserActionForPlayback=[].
-        // El click() dispara el handler del HTML que ya tiene ensurePlayingAndUnmuted.
         let js = """
         try {
           var ev = new MouseEvent('click', {bubbles: true, cancelable: true});
