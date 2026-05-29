@@ -57,7 +57,11 @@ final class WebPlayerEngine: NSObject {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
-        cfg.allowsPictureInPictureMediaPlayback = false
+        // v2.38: PiP=true permite a iOS mantener el WKWebView produciendo audio
+        // en background. No activamos PiP visualmente (no llamamos
+        // startPictureInPicture); solo lo declaramos en config para que iOS
+        // considere el media del iframe "background-eligible".
+        cfg.allowsPictureInPictureMediaPlayback = true
         cfg.processPool = WKProcessPool()
         let ucc = WKUserContentController()
         ucc.add(self, name: "player")
