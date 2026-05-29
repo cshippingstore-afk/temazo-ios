@@ -88,22 +88,22 @@ final class Player: NSObject, ObservableObject {
         }
     }
 
-    /// v2.40: helper que monta AVPlayer con la URL ya resuelta (cache o extracción)
-    /// v2.41: play primero + seek con tolerancia infinita = arranque sin gap audible.
+    /// v2.42: vuelta al pattern v2.40 que parcialmente funcionaba (bloqueo OK
+    /// con gap audible aceptable). Mis cambios en v2.41 lo rompieron.
     private func startBackgroundAVPlayer(url: URL, seekTo currentPos: Float, videoId: String) {
         let item = AVPlayerItem(url: url)
         let avp = AVPlayer(playerItem: item)
         avp.automaticallyWaitsToMinimizeStalling = false
-        // v2.41: PLAY PRIMERO, seek con tolerancia infinita después.
-        // Antes hacíamos seek(toleranceBefore: .zero, toleranceAfter: .zero) → AVPlayer
-        // tenía que descargar el segmento exacto del keyframe a la posición pedida →
-        // 1-2s de silencio audible al bloquear. Con tolerancia infinita el seek va al
-        // keyframe más cercano YA en buffer → instantáneo (puede saltar ±2s pero el
-        // audio no se interrumpe).
-        avp.play()
+        // Seek con tolerancia .zero + completion handler. Sí hay gap audible de
+        // 1-2s pero ES FIABLE (v2.41 con play-primero + infinite tolerance
+        // dejaba el bloqueo sin sonido). Mejor lento+seguro que rápido+roto.
         if currentPos > 1 {
             let cm = CMTime(seconds: Double(currentPos), preferredTimescale: 600)
-            avp.seek(to: cm, toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity)
+            avp.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                avp.play()
+            }
+        } else {
+            avp.play()
         }
         bgTimeObs = avp.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
@@ -120,8 +120,6 @@ final class Player: NSObject, ObservableObject {
         bgAVPlayer = avp
         inBackgroundPlayback = true
         print("[Player] bg AVPlayer armed videoId=\(videoId)")
-        // v2.41: prewarm extractor para los próximos 3 tracks AUNQUE estemos en bg
-        // → al cambiar canción desde lock screen el switch es instant (cache hit).
         prewarmNextExtractor()
     }
 
@@ -243,25 +241,27 @@ final class Player: NSObject, ObservableObject {
             return
         }
         if inBackgroundPlayback {
-            // v2.41: swap robusto en background.
-            // Problema v2.40: hacíamos replaceCurrentItem inmediato + play.
-            // Si la session se desactivó (gap entre el end del item viejo y la
-            // creación del nuevo), play() entraba mute. iOS no re-activa la
-            // session automáticamente para el nuevo item.
-            // Fix: re-activar session ANTES de replaceCurrentItem, y usar
-            // AVPlayer NUEVO en vez de reusar el mismo (evita el estado mute
-            // heredado del item terminado).
-            guard let oldAvp = bgAVPlayer else { return }
+            // v2.42: vuelta al pattern v2.40 (que sí cambiaba canción) + 2 fixes
+            // quirúrgicos para los síntomas reportados:
+            //   1. state.positionSec = 0 EXPLÍCITO → counter no se queda con el
+            //      segundo del track anterior
+            //   2. setActive(true) antes de play() → si iOS desactivó la session
+            //      en el gap entre items, la reactivamos y play() no entra mute
+            guard let avp = bgAVPlayer else { return }
             if let obs = bgEndObs { NotificationCenter.default.removeObserver(obs); bgEndObs = nil }
-            if let obs = bgTimeObs { oldAvp.removeTimeObserver(obs); bgTimeObs = nil }
-            oldAvp.pause()
-            oldAvp.replaceCurrentItem(with: nil)
-            // Re-asegurar session activa con setActive directo (no ensureActive
-            // no-op). iOS desactiva la session al terminar un AVPlayerItem en bg.
-            try? AVAudioSession.sharedInstance().setActive(true, options: [])
+            state.positionSec = 0  // FIX 1
             let setItem: (URL) -> Void = { [weak self] url in
                 guard let self else { return }
-                self.startBackgroundAVPlayer(url: url, seekTo: 0, videoId: ytId)
+                let item = AVPlayerItem(url: url)
+                avp.replaceCurrentItem(with: item)
+                try? AVAudioSession.sharedInstance().setActive(true, options: [])  // FIX 2
+                avp.play()
+                self.bgEndObs = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor in self?.next() }
+                }
+                self.prewarmNextExtractor()
             }
             if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
                 setItem(cached)
