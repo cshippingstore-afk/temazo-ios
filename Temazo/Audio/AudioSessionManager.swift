@@ -123,10 +123,15 @@ final class AudioSessionManager {
               let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
         print("[AudioSession] interruption type=\(type.rawValue) info=\(info)")
+        // v2.28: iOS dispara interruption .began FALSAMENTE cuando el WKWebView en
+        // UIWindow secundario empieza a producir audio (es como si iOS considerara
+        // que es "otro app" interrumpiendo). Eso disparaba Player.pause() inmediato
+        // → "suena 1 seg y se para" del user.
+        // FIX: NO auto-pausamos en .began. .ended sigue funcionando para resumir
+        // tras llamada/Siri/etc. real del sistema.
         switch type {
         case .began:
-            print("[AudioSession] interruption BEGAN — pausing player")
-            Task { @MainActor in Player.shared.pause() }
+            print("[AudioSession] interruption BEGAN — IGNORADO (no auto-pause)")
         case .ended:
             print("[AudioSession] interruption ENDED")
             if let optsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
@@ -144,8 +149,11 @@ final class AudioSessionManager {
         guard let info = note.userInfo,
               let reasonRaw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw) else { return }
+        print("[AudioSession] routeChange reason=\(reason.rawValue)")
+        // v2.28: iOS puede disparar oldDeviceUnavailable falsamente al arrancar el
+        // WKWebView audio. No auto-pausamos — el user pausa si quiere.
         if reason == .oldDeviceUnavailable {
-            Task { @MainActor in Player.shared.pause() }
+            print("[AudioSession] oldDeviceUnavailable — IGNORADO (no auto-pause)")
         }
     }
 }

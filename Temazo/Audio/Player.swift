@@ -52,7 +52,21 @@ final class Player: NSObject, ObservableObject {
                 // tomaba el output de audio del proceso y dejaba al iframe sin sonido
                 // ("audio se escuchaba 1 seg y se paraba" v2.21-v2.25).
             case "paused":
-                self.state.isPlaying = false
+                // v2.28: iOS pausa el iframe automáticamente aunque esté en UIWindow
+                // secundario. Si el state.isPlaying era TRUE (el user NO ha pulsado
+                // pause), entonces fue iOS — forzamos resume inmediato + retry.
+                // Solo respetamos la pausa real si state.isPlaying ya estaba false
+                // (significa que el user pulsó pause y el iframe respondió OK).
+                if self.state.isPlaying {
+                    print("[Player] iframe paused inesperadamente — force resume")
+                    Task { @MainActor [weak self] in
+                        // Pequeño delay para no entrar en un play-pause-play loop
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        self?.engine.resume()
+                    }
+                } else {
+                    self.state.isPlaying = false
+                }
             case "buffering":
                 self.state.loadingState = .extracting
             case "ended":
@@ -138,14 +152,18 @@ final class Player: NSObject, ObservableObject {
 
     func resume() {
         AudioSessionManager.shared.ensureActive()
-        engine.resume()
+        // PRIMERO marcamos state.isPlaying=true para que el callback "playing"
+        // del iframe no haga nada raro.
         state.isPlaying = true
+        engine.resume()
     }
 
     func pause() {
         print("[Player] pause() called")
-        engine.pause()
+        // PRIMERO state.isPlaying=false → el handler "paused" del iframe
+        // verá isPlaying=false y NO hará force-resume (sabrá que fue user pause).
         state.isPlaying = false
+        engine.pause()
     }
 
     /// Añade un track al final de la cola actual sin interrumpir reproducción.
