@@ -19,30 +19,36 @@ final class AudioSessionManager {
     func configure() {
         guard !configured else { return }
         configured = true
+        // v2.34: ROOT CAUSE encontrado vía idevicesyslog del iPhone:
+        //   audiomxd: CMSessionMgr cmsInterruptSession
+        //     'Temazo(2842)' [MediaPlayback] INTERRUPTING
+        //     'com.apple.WebKit(2844)' [MediaPlayback]
+        //   AudioToolboxServerHandleInterruption Stop Now process
+        //     'com.apple.WebKit', fade time 0.70s
+        //
+        // Nuestra AVAudioSession (.playback) competía con la AVAudioSession
+        // que el WKWebView crea AUTOMÁTICAMENTE cuando reproduce media.
+        // iOS interrumpía la del WebKit → fade 0.7s + silencio = "la pausa".
+        //
+        // SOLUCIÓN: NO activar AVAudioSession desde nuestra app. WebKit
+        // configura + activa su propia session — igual que Safari. Sin
+        // conflict. La capability "Audio" en UIBackgroundModes (Info.plist)
+        // permite que la session del WebKit siga activa en background.
         do {
             let session = AVAudioSession.sharedInstance()
-            // v2.33: mode .moviePlayback (NO .default) — confirmado que en Safari
-            // del iPhone el iframe funciona sin interrupciones. Safari usa
-            // moviePlayback mode para video web. Con .default + .longFormAudio
-            // policy iOS aplicaba reglas de "música pura" que pausaban el
-            // WKWebView que reproduce el iframe. moviePlayback es el modo
-            // standard de YouTube/Netflix/Safari para WKWebView con video.
+            // Solo setCategory para declarar la intención. NO setActive(true)
+            // — eso lo hace WebKit cuando arranca el media.
+            // .mixWithOthers permite que la session del Webkit coexista con
+            // la nuestra sin interrupción mutua (en el raro caso que se
+            // activen las dos).
             try session.setCategory(
                 .playback,
                 mode: .moviePlayback,
-                options: [.allowAirPlay, .allowBluetoothA2DP]
+                options: [.mixWithOthers, .allowAirPlay, .allowBluetoothA2DP]
             )
-            try session.setActive(true, options: [])
-            print("[AudioSession] configured \(session.category) mode=\(session.mode)")
+            print("[AudioSession] category set (no setActive — WebKit la activa)")
         } catch {
-            do {
-                let s = AVAudioSession.sharedInstance()
-                try s.setCategory(.playback, mode: .moviePlayback,
-                                  options: [.allowAirPlay, .allowBluetoothA2DP])
-                try s.setActive(true)
-            } catch {
-                print("[AudioSession] error: \(error)")
-            }
+            print("[AudioSession] setCategory error: \(error)")
         }
 
         NotificationCenter.default.addObserver(
@@ -77,9 +83,12 @@ final class AudioSessionManager {
         }
     }
 
+    /// v2.34: NO-OP. Activar la session de la app interrumpe la del WKWebView
+    /// (CMSessionMgr cmsInterruptSession). WebKit gestiona su propia session
+    /// activamente cuando reproduce media. Llamadas legacy a ensureActive() se
+    /// mantienen sin romper la API pero NO hacen nada.
     func ensureActive() {
-        do { try AVAudioSession.sharedInstance().setActive(true, options: []) }
-        catch { print("[AudioSession] ensureActive error: \(error)") }
+        // No-op intencional. Ver comment de configure() para context completo.
     }
 
     /// Arranca un loop silencioso con AVAudioPlayer para mantener la AVAudioSession
