@@ -34,15 +34,30 @@ final class AudioSessionManager {
         // jamás → cero cmsInterruptSession contra WebKit.
         do {
             let session = AVAudioSession.sharedInstance()
+            // v2.37: añadida policy .longFormAudio (la que usaba el v2.26 AVPlayer
+            // que sí funcionaba en bloqueo). Es la declaración canónica de Apple
+            // para apps de música streaming (Spotify, Apple Music): "soy audio de
+            // larga duración, manténme en background al bloquear pantalla".
+            // mode: .default también (no .moviePlayback) — música, no video.
             try session.setCategory(
                 .playback,
-                mode: .moviePlayback,
+                mode: .default,
+                policy: .longFormAudio,
                 options: [.allowAirPlay, .allowBluetoothA2DP]
             )
             try session.setActive(true, options: [])
-            print("[AudioSession] active+exclusive (setActive una vez, jamás re-llamado)")
+            print("[AudioSession] active+exclusive+longFormAudio (setActive una vez)")
         } catch {
-            print("[AudioSession] configure error: \(error)")
+            // Fallback sin policy si el sistema no la soporta (iOS <11)
+            do {
+                let s = AVAudioSession.sharedInstance()
+                try s.setCategory(.playback, mode: .default,
+                                  options: [.allowAirPlay, .allowBluetoothA2DP])
+                try s.setActive(true)
+                print("[AudioSession] fallback sin policy")
+            } catch {
+                print("[AudioSession] configure error: \(error)")
+            }
         }
 
         NotificationCenter.default.addObserver(
