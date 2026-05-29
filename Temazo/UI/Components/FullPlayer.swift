@@ -159,7 +159,8 @@ struct FullPlayer: View {
         if let r = try? await TemazoAPI.shared.artist(
             id: t.artistId, slug: t.artistSlug, name: nil
         ) {
-            let url = r.artist?.imageLarge ?? r.artist?.imageMedium
+            // Artist model tiene imageLarge + image (no imageMedium — eso es de AlbumSummary).
+            let url = r.artist?.imageLarge ?? r.artist?.image
             await MainActor.run { fetchedArtistImg = url }
         }
     }
