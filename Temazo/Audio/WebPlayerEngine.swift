@@ -63,7 +63,7 @@ final class WebPlayerEngine: NSObject {
         ucc.add(self, name: "player")
         cfg.userContentController = ucc
 
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: cfg)
+        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 100, height: 100), configuration: cfg)
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
@@ -97,16 +97,20 @@ final class WebPlayerEngine: NSObject {
         }
 
         let window = UIWindow(windowScene: scene)
-        // windowLevel alto = encima de todo, pero alpha 0.01 + 1x1 = invisible
+        // windowLevel alto = encima de todo, pero alpha 0.01 = invisible al usuario.
+        // SIZE 100×100 (no 1×1) — iOS suspende el JS engine de WebViews "tiny"
+        // porque los considera "no interactivos". 100×100 fuerza tratarlo como
+        // contenido real → JS sigue ejecutándose en background y el watchdog
+        // 50ms puede reaccionar a pausas iOS.
         window.windowLevel = UIWindow.Level.alert + 1
-        window.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        window.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
         window.alpha = 0.01
         window.isUserInteractionEnabled = false
         window.backgroundColor = .clear
         window.isHidden = false
 
         let vc = UIViewController()
-        vc.view.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        vc.view.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
         vc.view.backgroundColor = .clear
         vc.view.isUserInteractionEnabled = false
 
