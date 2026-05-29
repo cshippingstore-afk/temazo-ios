@@ -64,15 +64,35 @@ final class Player: NSObject, ObservableObject {
         }
         let currentPos = state.positionSec
         print("[Player] background → switching iframe → AVPlayer en pos=\(currentPos)")
-        // Pausa el iframe (WebKit se va a suspender de todos modos al bloquear)
         engine.pause()
-        // Arranca AVPlayer con el proxy
-        let urlStr = "https://temazo.es/api/yt_proxy.php?id=\(ytId)"
-        guard let url = URL(string: urlStr) else { return }
+        // v2.40: usamos YouTubeExtractor (URL directa googlevideo desde el iPhone)
+        // en vez del proxy yt_proxy.php (que está caído con 502 Bad Gateway).
+        // El extractor: ~500ms en cold, instantáneo en cache hit.
+        if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
+            startBackgroundAVPlayer(url: cached, seekTo: currentPos, videoId: ytId)
+        } else {
+            // Cold extract — iOS nos da unos segundos antes de suspendernos.
+            // Mientras tanto el iframe ya está pausado; cuando AVPlayer arranque
+            // habrá un gap pequeño pero el audio continúa.
+            Task { @MainActor in
+                do {
+                    let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 5)
+                    self.startBackgroundAVPlayer(url: url, seekTo: currentPos, videoId: ytId)
+                } catch {
+                    print("[Player] bg extract error \(error) — fallback proxy")
+                    if let purl = URL(string: "https://temazo.es/api/yt_proxy.php?id=\(ytId)") {
+                        self.startBackgroundAVPlayer(url: purl, seekTo: currentPos, videoId: ytId)
+                    }
+                }
+            }
+        }
+    }
+
+    /// v2.40: helper que monta AVPlayer con la URL ya resuelta (cache o extracción)
+    private func startBackgroundAVPlayer(url: URL, seekTo currentPos: Float, videoId: String) {
         let item = AVPlayerItem(url: url)
         let avp = AVPlayer(playerItem: item)
         avp.automaticallyWaitsToMinimizeStalling = false
-        // Seek al punto donde estábamos en el iframe
         if currentPos > 1 {
             let cm = CMTime(seconds: Double(currentPos), preferredTimescale: 600)
             avp.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
@@ -81,7 +101,6 @@ final class Player: NSObject, ObservableObject {
         } else {
             avp.play()
         }
-        // Position updates desde AVPlayer durante background
         bgTimeObs = avp.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
@@ -89,7 +108,6 @@ final class Player: NSObject, ObservableObject {
             guard let self else { return }
             self.state.positionSec = Float(t.seconds)
         }
-        // Auto-next al terminar
         bgEndObs = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
@@ -97,6 +115,7 @@ final class Player: NSObject, ObservableObject {
         }
         bgAVPlayer = avp
         inBackgroundPlayback = true
+        print("[Player] bg AVPlayer armed videoId=\(videoId)")
     }
 
     @objc private func handleWillEnterForeground() {
@@ -208,6 +227,7 @@ final class Player: NSObject, ObservableObject {
 
     /// v2.39: arranca el track actual en el engine ACTIVO (iframe o AVPlayer
     /// según estemos en foreground o background).
+    /// v2.40: en background usamos YouTubeExtractor (proxy yt_proxy.php está 502).
     private func startCurrentTrack() {
         guard let track = state.currentTrack,
               let ytId = track.youtubeId, !ytId.isEmpty else {
@@ -216,23 +236,57 @@ final class Player: NSObject, ObservableObject {
             return
         }
         if inBackgroundPlayback {
-            // En background: swap del AVPlayerItem
-            let urlStr = "https://temazo.es/api/yt_proxy.php?id=\(ytId)"
-            guard let url = URL(string: urlStr), let avp = bgAVPlayer else { return }
-            // Cleanup observer del item anterior
+            // Swap AVPlayerItem en background — extractor para URL directa
+            guard let avp = bgAVPlayer else { return }
             if let obs = bgEndObs { NotificationCenter.default.removeObserver(obs); bgEndObs = nil }
-            let item = AVPlayerItem(url: url)
-            avp.replaceCurrentItem(with: item)
-            avp.play()
-            bgEndObs = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in self?.next() }
+            let setItem: (URL) -> Void = { [weak self] url in
+                guard let self else { return }
+                let item = AVPlayerItem(url: url)
+                avp.replaceCurrentItem(with: item)
+                avp.play()
+                self.bgEndObs = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor in self?.next() }
+                }
+            }
+            if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
+                setItem(cached)
+            } else {
+                Task { @MainActor in
+                    do {
+                        let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 5)
+                        setItem(url)
+                    } catch {
+                        if let purl = URL(string: "https://temazo.es/api/yt_proxy.php?id=\(ytId)") {
+                            setItem(purl)
+                        }
+                    }
+                }
             }
         } else {
             engine.play(videoId: ytId)
+            // v2.40: prewarm extractor cache para el track actual + próximos 3
+            // → al bloquear pantalla el switch a AVPlayer es near-instant.
+            YouTubeExtractor.shared.prefetch(videoIDs: [ytId])
+            prewarmNextExtractor()
         }
         state.isPlaying = true
+    }
+
+    /// v2.40: pre-extrae URLs de los próximos 3 tracks para que el switch a
+    /// background sea instantáneo aunque iOS suspenda antes de poder hacer extract.
+    private func prewarmNextExtractor() {
+        guard !state.queue.isEmpty else { return }
+        var ids: [String] = []
+        for offset in 1...3 {
+            let idx = (state.index + offset) % state.queue.count
+            if let yt = state.queue[idx].youtubeId, !yt.isEmpty, !ids.contains(yt) {
+                ids.append(yt)
+            }
+            if state.queue.count <= offset { break }
+        }
+        if !ids.isEmpty { YouTubeExtractor.shared.prefetch(videoIDs: ids) }
     }
 
     /// Cicla repeat: OFF → REPEAT_ALL → REPEAT_ONE → OFF
