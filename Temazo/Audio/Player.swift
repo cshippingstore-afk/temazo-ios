@@ -4,47 +4,51 @@ import Combine
 import UIKit
 import MediaPlayer
 
-/// Player iOS basado en WKWebView + YouTube IFrame Player API (v2.21).
+/// Player iOS v2.43 — DUAL ENGINE PARALELO (iframe + AVPlayer simultáneos)
 ///
-/// Misma arquitectura que el Android Player.kt (que reproduce sin lag):
-///  - WebPlayerEngine pre-carga la página HTML al arrancar la app
-///  - Las canciones se cargan con `player.loadVideoById()` JS — 50-100ms
-///  - El WebView vive en una UIView 1×1 px de MainScreen (no se destruye)
-///  - AVAudioSession + silent loop mantienen audio en background
-///  - MediaSession via MPNowPlayingInfoCenter (lock screen + auriculares + coche)
+/// Arquitectura final tras 8h de iteraciones fallidas con switchers:
+///  - iframe (WKWebView): único motor AUDIBLE en foreground. Da el arranque
+///    instantáneo y la UX que el user pidió ("como Android").
+///  - parallelAVPlayer: AVPlayer corriendo en paralelo desde el primer play,
+///    con la misma canción extraída por YouTubeExtractor, AL VOLUMEN 0 en
+///    foreground. iOS lo registra como audio "real" del proceso → mantiene
+///    la app + WebKit vivos en background + sobrevive al lock.
+///  - Sincronización continua: cada tick de iframe.onTime comprueba drift del
+///    AVPlayer paralelo y le hace seek si se desvía >1s.
+///  - Lock screen: parallelAVPlayer.volume = 1 + iframe.pause(). Sin gap, sin
+///    extract cold, sin replaceCurrentItem.
+///  - Unlock: iframe.seek + iframe.resume + parallelAVPlayer.volume = 0.
 ///
-/// API pública IDÉNTICA a la versión AVPlayer → el resto de la app (MiniPlayer,
-/// FullPlayer, MainScreen, NowPlayingManager, etc.) no necesita cambios.
+/// Por qué los switchers (v2.39-v2.42) fallaban:
+///   El AVPlayer arrancaba EN el momento del lock → seek/extract latency = gap
+///   audible. Y replaceCurrentItem entre tracks dejaba la session desactivada
+///   = mute. Solución: el AVPlayer YA está corriendo cuando llega el lock,
+///   solo hay que subirle volumen.
 @MainActor
 final class Player: NSObject, ObservableObject {
     static let shared = Player()
     @Published var state = PlayerState()
 
     private let engine = WebPlayerEngine.shared
-    /// Flag para evitar doble next() entre estado "ended" del player y nuestro
-    /// detector manual via positionSec ≥ durationSec - 0.4s.
     private var didAutoNext: Bool = false
     private var crossfadeMs: Int = 250
 
-    /// v2.39: Hybrid background switcher.
-    /// WKWebView no sobrevive al lock screen porque iOS suspende el proceso
-    /// WebKit (PID distinto). Cuando la app entra background CON música
-    /// reproduciendo, traspasamos el audio al AVPlayer streaming via
-    /// temazo.es/api/yt_proxy.php — AVPlayer SÍ aguanta lock porque es la
-    /// arquitectura nativa iOS para background audio (UIBackgroundModes audio).
-    /// Al volver a foreground, traspasamos de vuelta al iframe.
-    private var bgAVPlayer: AVPlayer?
-    private var bgTimeObs: Any?
-    private var bgEndObs: NSObjectProtocol?
-    /// true mientras estamos reproduciendo via bgAVPlayer (background mode)
-    private var inBackgroundPlayback: Bool = false
+    /// v2.43: AVPlayer paralelo que SIEMPRE corre cuando hay música.
+    /// Volumen 0 en foreground (iframe audible), volumen 1 al bloquear.
+    private var parallelPlayer: AVPlayer?
+    private var parallelItem: AVPlayerItem?
+    private var parallelEndObs: NSObjectProtocol?
+    private var parallelTimeObs: Any?
+    /// ID del track cargado en el paralelo (para evitar re-cargas redundantes).
+    private var parallelLoadedYtId: String?
+    /// true = app en background, parallel está audible.
+    private var inBackground: Bool = false
 
     override init() {
         super.init()
         UIApplication.shared.beginReceivingRemoteControlEvents()
         AudioSessionManager.shared.ensureActive()
         wireEngine()
-        // v2.39: observers del lifecycle para hybrid switcher
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleEnteredBackground),
             name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -53,96 +57,158 @@ final class Player: NSObject, ObservableObject {
             name: UIApplication.willEnterForegroundNotification, object: nil)
     }
 
-    // MARK: - v2.39 Hybrid Background Switcher
+    // MARK: - v2.43 Lifecycle bg/fg
 
     @objc private func handleEnteredBackground() {
-        // Solo activamos el switch si HAY música sonando
-        guard state.isPlaying, let track = state.currentTrack,
-              let ytId = track.youtubeId, !ytId.isEmpty else {
-            print("[Player] background: nada que reproducir, skip switch")
-            return
-        }
-        let currentPos = state.positionSec
-        print("[Player] background → switching iframe → AVPlayer en pos=\(currentPos)")
+        guard state.isPlaying else { return }
+        print("[Player] → BG: iframe pause, parallel volume = 1")
+        inBackground = true
+        // 1. Pausar iframe (WebKit se suspendería de todas formas, mejor explícito)
         engine.pause()
-        // v2.40: usamos YouTubeExtractor (URL directa googlevideo desde el iPhone)
-        // en vez del proxy yt_proxy.php (que está caído con 502 Bad Gateway).
-        // El extractor: ~500ms en cold, instantáneo en cache hit.
-        if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
-            startBackgroundAVPlayer(url: cached, seekTo: currentPos, videoId: ytId)
+        // 2. Subir volumen del paralelo. Como YA está corriendo en sync, no hay gap.
+        if let avp = parallelPlayer {
+            // Asegurar session activa (iOS la puede haber tocado)
+            try? AVAudioSession.sharedInstance().setActive(true, options: [])
+            avp.volume = 1.0
+            // Por si estaba pausado por sync inicial
+            if avp.rate == 0 && state.isPlaying { avp.play() }
         } else {
-            // Cold extract — iOS nos da unos segundos antes de suspendernos.
-            // Mientras tanto el iframe ya está pausado; cuando AVPlayer arranque
-            // habrá un gap pequeño pero el audio continúa.
+            print("[Player] BG: parallel no ready → cold start fallback")
+            // Fallback: parallel no estaba listo (track recién tappeado).
+            // Arrancarlo ahora con extractor.
+            coldStartParallel()
+        }
+    }
+
+    @objc private func handleWillEnterForeground() {
+        print("[Player] → FG: iframe resume, parallel volume = 0")
+        inBackground = false
+        // Bajar volumen del paralelo PRIMERO para evitar echo durante la transición
+        let parallelPos = Float(parallelPlayer?.currentTime().seconds ?? 0)
+        parallelPlayer?.volume = 0
+        // Resumir iframe en la posición del paralelo (que es la "real")
+        if state.isPlaying {
+            if parallelPos > 1 { engine.seek(toSec: parallelPos) }
+            engine.resume()
+            state.positionSec = parallelPos
+        }
+    }
+
+    /// v2.43: arranca el paralelo cuando aún no había URL al bloquear.
+    /// Edge case raro pero posible si user toca play + bloquea en <500ms.
+    private func coldStartParallel() {
+        guard let track = state.currentTrack,
+              let ytId = track.youtubeId, !ytId.isEmpty else { return }
+        let pos = state.positionSec
+        Task { @MainActor in
+            do {
+                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 5)
+                self.spawnParallel(url: url, ytId: ytId, startAt: pos, audible: true)
+            } catch {
+                if let purl = URL(string: "https://temazo.es/api/yt_proxy.php?id=\(ytId)") {
+                    self.spawnParallel(url: purl, ytId: ytId, startAt: pos, audible: true)
+                }
+            }
+        }
+    }
+
+    // MARK: - v2.43 Paralelo: ensure / sync / cleanup
+
+    /// Asegura que el paralelo esté cargado con el ytId actual. Llama cada vez
+    /// que cambia la canción (playTrack/next/prev).
+    private func ensureParallelLoaded() {
+        guard let track = state.currentTrack,
+              let ytId = track.youtubeId, !ytId.isEmpty else { return }
+        if parallelLoadedYtId == ytId { return }  // ya cargado
+
+        if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
+            spawnParallel(url: cached, ytId: ytId, startAt: 0, audible: inBackground)
+        } else {
             Task { @MainActor in
                 do {
                     let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 5)
-                    self.startBackgroundAVPlayer(url: url, seekTo: currentPos, videoId: ytId)
+                    // Verificar que el track no haya cambiado mientras tanto
+                    guard self.state.currentTrack?.youtubeId == ytId else { return }
+                    self.spawnParallel(url: url, ytId: ytId, startAt: 0, audible: self.inBackground)
                 } catch {
-                    print("[Player] bg extract error \(error) — fallback proxy")
                     if let purl = URL(string: "https://temazo.es/api/yt_proxy.php?id=\(ytId)") {
-                        self.startBackgroundAVPlayer(url: purl, seekTo: currentPos, videoId: ytId)
+                        guard self.state.currentTrack?.youtubeId == ytId else { return }
+                        self.spawnParallel(url: purl, ytId: ytId, startAt: 0, audible: self.inBackground)
                     }
                 }
             }
         }
     }
 
-    /// v2.42: vuelta al pattern v2.40 que parcialmente funcionaba (bloqueo OK
-    /// con gap audible aceptable). Mis cambios en v2.41 lo rompieron.
-    private func startBackgroundAVPlayer(url: URL, seekTo currentPos: Float, videoId: String) {
+    /// Crea (o reemplaza) el AVPlayer paralelo con la URL dada.
+    /// audible=true → volumen 1 (estamos en bg). audible=false → volumen 0 (fg).
+    private func spawnParallel(url: URL, ytId: String, startAt: Float, audible: Bool) {
+        // Limpiar el paralelo anterior si existe
+        cleanupParallel()
+
         let item = AVPlayerItem(url: url)
         let avp = AVPlayer(playerItem: item)
         avp.automaticallyWaitsToMinimizeStalling = false
-        // Seek con tolerancia .zero + completion handler. Sí hay gap audible de
-        // 1-2s pero ES FIABLE (v2.41 con play-primero + infinite tolerance
-        // dejaba el bloqueo sin sonido). Mejor lento+seguro que rápido+roto.
-        if currentPos > 1 {
-            let cm = CMTime(seconds: Double(currentPos), preferredTimescale: 600)
-            avp.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                avp.play()
-            }
-        } else {
-            avp.play()
+        avp.volume = audible ? 1.0 : 0.0
+
+        if startAt > 1 {
+            let cm = CMTime(seconds: Double(startAt), preferredTimescale: 600)
+            avp.seek(to: cm, toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity)
         }
-        bgTimeObs = avp.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
-            queue: .main
-        ) { [weak self] t in
-            guard let self else { return }
-            self.state.positionSec = Float(t.seconds)
-        }
-        bgEndObs = NotificationCenter.default.addObserver(
+        // play() siempre — el paralelo está corriendo siempre que isPlaying=true.
+        if state.isPlaying { avp.play() }
+
+        // Auto-next cuando termine el item (importante en bg para cadena de canciones)
+        parallelEndObs = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.next() }
         }
-        bgAVPlayer = avp
-        inBackgroundPlayback = true
-        print("[Player] bg AVPlayer armed videoId=\(videoId)")
-        prewarmNextExtractor()
+
+        // Time observer SOLO para mantener state.positionSec actualizado en bg.
+        // En fg el iframe es el master del tiempo via engine.onTime.
+        parallelTimeObs = avp.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] t in
+            guard let self else { return }
+            if self.inBackground {
+                self.state.positionSec = Float(t.seconds)
+            }
+        }
+
+        parallelPlayer = avp
+        parallelItem = item
+        parallelLoadedYtId = ytId
+        print("[Player] parallel armed videoId=\(ytId) audible=\(audible) startAt=\(startAt)")
     }
 
-    @objc private func handleWillEnterForeground() {
-        guard inBackgroundPlayback, let avp = bgAVPlayer else { return }
-        let pos = Float(avp.currentTime().seconds)
-        print("[Player] foreground → switching AVPlayer → iframe en pos=\(pos)")
-        // Cleanup AVPlayer
-        if let obs = bgTimeObs { avp.removeTimeObserver(obs); bgTimeObs = nil }
-        if let obs = bgEndObs { NotificationCenter.default.removeObserver(obs); bgEndObs = nil }
-        avp.pause()
-        avp.replaceCurrentItem(with: nil)
-        bgAVPlayer = nil
-        inBackgroundPlayback = false
-        // Re-seek + resume iframe en la posición exacta
-        if pos > 1 { engine.seek(toSec: pos) }
-        engine.resume()
-        state.positionSec = pos
+    private func cleanupParallel() {
+        if let obs = parallelEndObs { NotificationCenter.default.removeObserver(obs); parallelEndObs = nil }
+        if let obs = parallelTimeObs, let avp = parallelPlayer { avp.removeTimeObserver(obs); parallelTimeObs = nil }
+        parallelPlayer?.pause()
+        parallelPlayer?.replaceCurrentItem(with: nil)
+        parallelPlayer = nil
+        parallelItem = nil
+        parallelLoadedYtId = nil
     }
+
+    /// Sincroniza el paralelo con el iframe si hay drift > 1s.
+    /// Llamado desde engine.onTime (cada 500ms).
+    private func syncParallelToIframe(iframePos: Float) {
+        guard !inBackground, let avp = parallelPlayer else { return }
+        let parallelPos = Float(avp.currentTime().seconds)
+        let drift = abs(iframePos - parallelPos)
+        if drift > 1.0 {
+            let cm = CMTime(seconds: Double(iframePos), preferredTimescale: 600)
+            avp.seek(to: cm, toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity)
+        }
+    }
+
+    // MARK: - Engine wiring
 
     private func wireEngine() {
         engine.onReady = { [weak self] in
-            print("[Player] engine ready")
             self?.state.loadingState = .ready
             self?.state.ready = true
         }
@@ -155,23 +221,14 @@ final class Player: NSObject, ObservableObject {
                 self.state.loadingState = .playing
                 self.didAutoNext = false
                 AudioSessionManager.shared.ensureActive()
-                // v2.35: silent loop reactivado. Con .mixWithOthers (configure()),
-                // el AVAudioPlayer silencioso a 0.05 NO le roba el output al iframe
-                // — coexisten. Sin él, iOS suspende el WKWebView al bloquear pantalla
-                // porque considera que el proceso no produce audio "real".
                 AudioSessionManager.shared.startSilentLoop()
+                // Si el paralelo estaba pausado (carga inicial), arrancarlo
+                if let avp = self.parallelPlayer, avp.rate == 0 { avp.play() }
             case "paused":
-                // v2.29: el watchdog JS dentro del iframe (cycle 250ms) detecta
-                // y revierte las pausas falsas de iOS sin round-trip a Swift.
-                // Aquí solo reflejamos el state. Si fue pausa real (user pulsó
-                // pause), el watchdog NO interferirá porque tmzPause() ya puso
-                // shouldBePlaying=false antes de llamar pauseVideo().
                 if !self.state.isPlaying {
-                    // pausa real del user
+                    // pausa real del user → ya pausamos el paralelo en pause()
                 } else {
-                    // pausa de iOS — el watchdog JS la revertirá; NO cambiamos
-                    // state.isPlaying para que la UI no parpadee.
-                    print("[Player] iframe paused (probable iOS auto-pause) — watchdog JS recuperará")
+                    print("[Player] iframe paused (iOS auto) — watchdog JS recuperará")
                 }
             case "buffering":
                 self.state.loadingState = .extracting
@@ -180,10 +237,6 @@ final class Player: NSObject, ObservableObject {
                     self.didAutoNext = true
                     self.next()
                 }
-            case "cued":
-                break
-            case "unstarted":
-                break
             default: break
             }
         }
@@ -191,17 +244,19 @@ final class Player: NSObject, ObservableObject {
         engine.onError = { [weak self] code in
             self?.state.lastError = "yt error \(code)"
             self?.state.loadingState = .failed
-            // YouTube error 150 / 101 = video bloqueado en este país. Skip al siguiente.
-            if code == 150 || code == 101 {
-                self?.next()
-            }
+            if code == 150 || code == 101 { self?.next() }
         }
 
         engine.onTime = { [weak self] pos, dur in
             guard let self else { return }
-            self.state.positionSec = pos
-            if dur > 0 { self.state.durationSec = dur }
-            // Auto-next manual de seguridad (si el evento 'ended' no llega)
+            // En foreground el iframe es el master del tiempo
+            if !self.inBackground {
+                self.state.positionSec = pos
+                if dur > 0 { self.state.durationSec = dur }
+                // Sync continuo del paralelo
+                self.syncParallelToIframe(iframePos: pos)
+            }
+            // Auto-next manual de seguridad
             if self.state.durationSec > 1,
                pos >= self.state.durationSec - 0.4,
                self.state.isPlaying,
@@ -220,7 +275,6 @@ final class Player: NSObject, ObservableObject {
         state.currentTrack = track
         state.positionSec = 0
         state.source = source
-        // Duración del backend = source of truth; el iframe la corregirá si difiere.
         state.durationSec = Float(track.durationSec ?? 0)
         state.lastError = nil
         state.loadingState = .extracting
@@ -230,9 +284,7 @@ final class Player: NSObject, ObservableObject {
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
 
-    /// v2.39: arranca el track actual en el engine ACTIVO (iframe o AVPlayer
-    /// según estemos en foreground o background).
-    /// v2.40: en background usamos YouTubeExtractor (proxy yt_proxy.php está 502).
+    /// Arranca el track actual en AMBOS motores. iframe = audible, AVPlayer paralelo = muted.
     private func startCurrentTrack() {
         guard let track = state.currentTrack,
               let ytId = track.youtubeId, !ytId.isEmpty else {
@@ -240,55 +292,15 @@ final class Player: NSObject, ObservableObject {
             state.loadingState = .failed
             return
         }
-        if inBackgroundPlayback {
-            // v2.42: vuelta al pattern v2.40 (que sí cambiaba canción) + 2 fixes
-            // quirúrgicos para los síntomas reportados:
-            //   1. state.positionSec = 0 EXPLÍCITO → counter no se queda con el
-            //      segundo del track anterior
-            //   2. setActive(true) antes de play() → si iOS desactivó la session
-            //      en el gap entre items, la reactivamos y play() no entra mute
-            guard let avp = bgAVPlayer else { return }
-            if let obs = bgEndObs { NotificationCenter.default.removeObserver(obs); bgEndObs = nil }
-            state.positionSec = 0  // FIX 1
-            let setItem: (URL) -> Void = { [weak self] url in
-                guard let self else { return }
-                let item = AVPlayerItem(url: url)
-                avp.replaceCurrentItem(with: item)
-                try? AVAudioSession.sharedInstance().setActive(true, options: [])  // FIX 2
-                avp.play()
-                self.bgEndObs = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-                ) { [weak self] _ in
-                    Task { @MainActor in self?.next() }
-                }
-                self.prewarmNextExtractor()
-            }
-            if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
-                setItem(cached)
-            } else {
-                Task { @MainActor in
-                    do {
-                        let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 5)
-                        setItem(url)
-                    } catch {
-                        if let purl = URL(string: "https://temazo.es/api/yt_proxy.php?id=\(ytId)") {
-                            setItem(purl)
-                        }
-                    }
-                }
-            }
-        } else {
-            engine.play(videoId: ytId)
-            // v2.40: prewarm extractor cache para el track actual + próximos 3
-            // → al bloquear pantalla el switch a AVPlayer es near-instant.
-            YouTubeExtractor.shared.prefetch(videoIDs: [ytId])
-            prewarmNextExtractor()
-        }
         state.isPlaying = true
+        engine.play(videoId: ytId)
+        // Prefetch del extractor para el current y los siguientes 3 tracks
+        YouTubeExtractor.shared.prefetch(videoIDs: [ytId])
+        prewarmNextExtractor()
+        // Cargar el paralelo (volumen 0 en fg, 1 en bg)
+        ensureParallelLoaded()
     }
 
-    /// v2.40: pre-extrae URLs de los próximos 3 tracks para que el switch a
-    /// background sea instantáneo aunque iOS suspenda antes de poder hacer extract.
     private func prewarmNextExtractor() {
         guard !state.queue.isEmpty else { return }
         var ids: [String] = []
@@ -302,12 +314,8 @@ final class Player: NSObject, ObservableObject {
         if !ids.isEmpty { YouTubeExtractor.shared.prefetch(videoIDs: ids) }
     }
 
-    /// Cicla repeat: OFF → REPEAT_ALL → REPEAT_ONE → OFF
-    func toggleRepeat() {
-        state.repeatMode = (state.repeatMode + 1) % 3
-    }
+    func toggleRepeat() { state.repeatMode = (state.repeatMode + 1) % 3 }
 
-    /// Toggle shuffle. Reordena la cola en sitio (sin parar la reproducción actual).
     func toggleShuffle() {
         state.shuffle.toggle()
         guard !state.queue.isEmpty, let current = state.currentTrack else { return }
@@ -325,25 +333,23 @@ final class Player: NSObject, ObservableObject {
     func resume() {
         AudioSessionManager.shared.ensureActive()
         state.isPlaying = true
-        if inBackgroundPlayback {
-            bgAVPlayer?.play()
-        } else {
-            engine.resume()
-        }
+        try? AVAudioSession.sharedInstance().setActive(true, options: [])
+        // Resume AMBOS motores. El que sea audible (iframe en fg, paralelo en bg)
+        // suena; el otro corre muted.
+        engine.resume()
+        parallelPlayer?.play()
     }
 
     func pause() {
         print("[Player] pause() called")
         state.isPlaying = false
-        if inBackgroundPlayback {
-            bgAVPlayer?.pause()
-        } else {
-            engine.pause()
+        engine.pause()
+        parallelPlayer?.pause()
+        if !inBackground {
             AudioSessionManager.shared.stopSilentLoop()
         }
     }
 
-    /// Añade un track al final de la cola actual sin interrumpir reproducción.
     func addToQueue(_ track: Track) {
         if state.queue.contains(where: { $0.id == track.id }) { return }
         state.queue.append(track)
@@ -352,7 +358,6 @@ final class Player: NSObject, ObservableObject {
     func next() {
         guard !state.queue.isEmpty else { return }
 
-        // REPEAT_ONE: recargar la misma canción
         if state.repeatMode == 2, state.index >= 0, state.index < state.queue.count {
             let t = state.queue[state.index]
             state.currentTrack = t
@@ -366,7 +371,6 @@ final class Player: NSObject, ObservableObject {
         }
 
         let atEnd = (state.index + 1) >= state.queue.count
-        // OFF: al final de la cola, parar (no wrap)
         if state.repeatMode == 0, atEnd {
             pause()
             state.positionSec = 0
@@ -400,17 +404,18 @@ final class Player: NSObject, ObservableObject {
     }
 
     func seekTo(seconds: Float) {
-        if inBackgroundPlayback, let avp = bgAVPlayer {
+        // Seek en AMBOS motores para mantener sync
+        engine.seek(toSec: seconds)
+        if let avp = parallelPlayer {
             let cm = CMTime(seconds: Double(seconds), preferredTimescale: 600)
-            avp.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
-        } else {
-            engine.seek(toSec: seconds)
+            avp.seek(to: cm, toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity)
         }
         state.positionSec = seconds
     }
 
     func stopAll() {
         engine.stop()
+        cleanupParallel()
         AudioSessionManager.shared.stopSilentLoop()
         state = PlayerState()
     }
