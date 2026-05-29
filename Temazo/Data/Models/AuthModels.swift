@@ -12,9 +12,12 @@ struct UserProfile: Codable, Equatable {
     let countryCode: String?
     let createdAt: String?
     let lastLoginAt: String?
+    /// Biografía pública del user (max 500 chars). Devuelta por /api/profile.php
+    /// y editable desde AccountScreen/EditProfileScreen → POST userBioSet.
+    let bio: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, email, username
+        case id, email, username, bio
         case avatarUrl = "avatar_url"
         case birthDate = "birth_date"
         case gender
@@ -38,6 +41,7 @@ struct UserProfile: Codable, Equatable {
         countryCode = try? c.decode(String.self, forKey: .countryCode)
         createdAt = try? c.decode(String.self, forKey: .createdAt)
         lastLoginAt = try? c.decode(String.self, forKey: .lastLoginAt)
+        bio = try? c.decode(String.self, forKey: .bio)
     }
 
     /// URL absoluta del avatar (con host de temazo.es prepended si era relativa).

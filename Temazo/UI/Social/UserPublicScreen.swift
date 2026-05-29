@@ -248,26 +248,23 @@ struct UserPublicScreen: View {
     private func startPolling() {
         pollTask?.cancel()
         pollTask = Task {
-            // Refresca now_playing y counts cada 15s mientras la pantalla esté abierta
+            // Refresca el bloque completo (now_playing + counts followers/following +
+            // pinned playlist + recent) cada 15s mientras la pantalla esté abierta.
+            // Antes solo refrescaba si now_playing != nil, lo que dejaba la pantalla
+            // con datos stale cuando el otro user dejaba de escuchar o cambiaban
+            // followers/following.
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15 * 1_000_000_000)
                 if Task.isCancelled { return }
-                guard let uid = self.data?.user?.id else { continue }
-                if let r = try? await TemazoAPI.shared.nowPlayingForUser(uid),
-                   r.now_playing != nil {
-                    updateNowPlaying(r.now_playing!)
+                if let id = userId {
+                    if let fresh = try? await TemazoAPI.shared.userPublicById(id) {
+                        await MainActor.run { self.data = fresh }
+                    }
+                } else if let u = username {
+                    if let fresh = try? await TemazoAPI.shared.userPublic(username: u) {
+                        await MainActor.run { self.data = fresh }
+                    }
                 }
-            }
-        }
-    }
-
-    private func updateNowPlaying(_ np: NowPlayingItem) {
-        // No podemos mutar UserPublicResponse (Decodable) sin rehacerla — recargo data.
-        Task {
-            if let id = userId {
-                data = try? await TemazoAPI.shared.userPublicById(id)
-            } else if let u = username {
-                data = try? await TemazoAPI.shared.userPublic(username: u)
             }
         }
     }

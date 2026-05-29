@@ -287,7 +287,7 @@ struct AccountScreen: View {
 
     @ViewBuilder
     private var bioSection: some View {
-        let bio = profile?.username.flatMap { _ in "" } ?? ""
+        let bio = profile?.bio ?? ""
         VStack(spacing: 6) {
             Button {
                 bioText = bio
@@ -351,6 +351,8 @@ struct AccountScreen: View {
 
     private func saveBio() async {
         _ = try? await TemazoAPI.shared.userBioSet(bioText)
+        // Recargar profile para que la pill "Editar bio"/"Añadir bio" refleje el cambio.
+        await loadProfile()
     }
 
     private var playlistsHeader: some View {
@@ -432,6 +434,9 @@ struct AccountScreen: View {
             let r = try await TemazoAPI.shared.profile()
             profile = r.user
             counts = r.counts
+            // Propagar avatar al store global → TopBar (y todo lo que observe
+            // auth.avatarUrl) refresca al instante sin recargar.
+            auth.setAvatarUrl(r.user?.displayAvatarUrl)
         } catch {}
     }
 
@@ -483,22 +488,7 @@ struct AccountScreen: View {
         Task {
             do {
                 let r = try await TemazoAPI.shared.usernameSet(n)
-                if r.ok {
-                    profile = profile.map { p in
-                        var copy = p
-                        // No podemos mutar struct con let; reconstruimos vía decoder
-                        copy = (try? JSONDecoder().decode(UserProfile.self, from:
-                            JSONSerialization.data(withJSONObject: [
-                                "id": p.id,
-                                "email": p.email,
-                                "username": r.username as Any,
-                                "avatar_url": p.avatarUrl as Any
-                            ].compactMapValues { v -> Any? in v is NSNull ? nil : v })
-                        )) ?? p
-                        return copy
-                    }
-                    await loadProfile()
-                }
+                if r.ok { await loadProfile() }
             } catch {}
             usernameText = ""
         }
@@ -520,7 +510,16 @@ struct AccountScreen: View {
             }()
             do {
                 let r = try await TemazoAPI.shared.avatarUpload(imageData: data, mime: mime)
-                if r.ok { await loadProfile() }
+                if r.ok {
+                    // Push inmediato al store ANTES de loadProfile para que el TopBar
+                    // refresque al instante (loadProfile puede tardar un tick).
+                    if let raw = r.avatarUrl, !raw.isEmpty {
+                        let abs = raw.hasPrefix("http") ? raw
+                            : "https://temazo.es\(raw.hasPrefix("/") ? "" : "/")\(raw)"
+                        auth.setAvatarUrl(abs)
+                    }
+                    await loadProfile()
+                }
             } catch {}
         }
     }

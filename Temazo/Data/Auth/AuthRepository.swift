@@ -6,8 +6,14 @@ final class AuthRepository: ObservableObject {
 
     @Published var currentUser: SessionUser? = nil
     @Published var isLoading: Bool = false
+    /// URL absoluta del avatar del user logueado. Se actualiza desde AccountScreen
+    /// (loadProfile + avatarUpload) y desde EditProfileScreen. La consume el TopBar
+    /// para refrescar al instante el botón avatar sin tener que recargar AccountScreen.
+    /// Equivalente al `StateFlow<String?> avatarUrl` de Android AuthRepository.
+    @Published var avatarUrl: String? = nil
 
     private static let userDefaultsKey = "temazo_session_user"
+    private static let avatarUrlKey = "temazo_session_avatar_url"
 
     private init() {
         // Restaurar usuario del disco INMEDIATAMENTE — así la UI nunca arranca
@@ -17,6 +23,22 @@ final class AuthRepository: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: Self.userDefaultsKey),
            let user = try? JSONDecoder().decode(SessionUser.self, from: data) {
             self.currentUser = user
+        }
+        // Restaurar avatar persistido para que el TopBar arranque con la foto
+        // correcta antes de que loadProfile() llegue del server.
+        self.avatarUrl = UserDefaults.standard.string(forKey: Self.avatarUrlKey)
+    }
+
+    /// Punto único de actualización del avatar — lo llaman AccountScreen y
+    /// EditProfileScreen cada vez que cargan profile o suben foto nueva.
+    /// Refresca todo lo que observe `auth.avatarUrl` (TopBar, etc.) y persiste
+    /// para próximos arranques. `nil` borra (delete avatar).
+    func setAvatarUrl(_ url: String?) {
+        avatarUrl = url
+        if let url, !url.isEmpty {
+            UserDefaults.standard.set(url, forKey: Self.avatarUrlKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.avatarUrlKey)
         }
     }
 
@@ -120,6 +142,7 @@ final class AuthRepository: ObservableObject {
         TemazoAPI.shared.clearPersistedCookies()
         currentUser = nil
         persistCurrentUser()  // borra del disco
+        setAvatarUrl(nil)     // limpia avatar persistido para próxima sesión
     }
 
     private func clearCookies() {

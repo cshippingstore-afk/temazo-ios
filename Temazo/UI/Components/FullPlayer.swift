@@ -19,6 +19,22 @@ struct FullPlayer: View {
     @State private var showRecommend = false
     @ObservedObject private var sleepTimer = SleepTimer.shared
 
+    /// Cache de la imagen large del artista resuelta por /api/artist.php cuando
+    /// la track no trae `artist_image_medium`. Réplica del Android FullPlayer.
+    @State private var fetchedArtistImg: String? = nil
+
+    /// URL efectiva del avatar del artista — la de la track si existe, si no la fetcheada.
+    private var artistAvatarUrl: String? {
+        if let raw = player.state.currentTrack?.artistImageMedium, !raw.isEmpty { return raw }
+        return fetchedArtistImg
+    }
+
+    /// Inicial del nombre del artista para fallback cuando no hay imagen.
+    private var initialChar: String {
+        guard let n = player.state.currentTrack?.artistName, let c = n.first else { return "?" }
+        return String(c).uppercased()
+    }
+
     var body: some View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
         let isFav = favorites.contains(t.id)
@@ -79,6 +95,7 @@ struct FullPlayer: View {
                         }
                 )
                 .task(id: t.id) { await loadLyrics(trackId: t.id) }
+                .task(id: t.artistId ?? -1) { await ensureArtistImage() }
             }
         )
     }
@@ -86,7 +103,9 @@ struct FullPlayer: View {
     // MARK: - Subviews
 
     private func topBar(closeAction: @escaping () -> Void) -> some View {
-        HStack {
+        let track = player.state.currentTrack
+        let canGoArtist = (track?.artistId != nil) || (track?.artistSlug?.isEmpty == false)
+        return HStack {
             Button { closeAction() } label: {
                 Image(systemName: "chevron.down").font(.system(size: 22))
                     .foregroundStyle(.white)
@@ -96,13 +115,53 @@ struct FullPlayer: View {
                 .font(.system(size: 10, weight: .bold)).tracking(1.5)
                 .foregroundStyle(Color.textMid)
             Spacer()
-            Button { onLoadPlaylist() } label: {
-                Image(systemName: "music.note.list").font(.system(size: 20))
-                    .foregroundStyle(.white)
+            // Avatar circular del artista (réplica Android) → tap abre ArtistScreen.
+            // Reemplaza al icono "music.note.list" que está movido a bottomActions.
+            Button {
+                if canGoArtist { onArtistClick() }
+            } label: {
+                ZStack {
+                    Circle().fill(Color.white.opacity(0.08))
+                    Circle().stroke(Color.neonPink.opacity(0.6), lineWidth: 1)
+                    if let raw = artistAvatarUrl, !raw.isEmpty,
+                       let url = URL(string: raw.hasPrefix("http") ? raw
+                                     : "https://temazo.es\(raw.hasPrefix("/") ? "" : "/")\(raw)") {
+                        AsyncImage(url: url) { phase in
+                            if case .success(let img) = phase {
+                                img.resizable().scaledToFill()
+                            } else {
+                                Text(initialChar)
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(.white)
+                            }
+                        }
+                        .clipShape(Circle())
+                    } else {
+                        Text(initialChar)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 36, height: 36)
             }
+            .buttonStyle(.plain)
+            .disabled(!canGoArtist)
         }
         .padding(.horizontal, 18)
         .padding(.top, 8)
+    }
+
+    /// Fetcha la imagen del artista vía /api/artist.php si la track no la trae.
+    private func ensureArtistImage() async {
+        guard let t = player.state.currentTrack else { return }
+        if let m = t.artistImageMedium, !m.isEmpty { return }
+        guard t.artistId != nil || (t.artistSlug?.isEmpty == false) else { return }
+        if let r = try? await TemazoAPI.shared.artist(
+            id: t.artistId, slug: t.artistSlug, name: nil
+        ) {
+            let url = r.artist?.imageLarge ?? r.artist?.imageMedium
+            await MainActor.run { fetchedArtistImg = url }
+        }
     }
 
     private func cover(track: Track) -> some View {
@@ -179,95 +238,90 @@ struct FullPlayer: View {
     }
 
     private func transportRow() -> some View {
-        HStack(spacing: 20) {
+        // Layout paridad Android: shuffle izquierda | prev/play/next centrados | repeat derecha.
+        // El botón de "cola" (list.bullet) se mueve a bottomActions porque ahí pega visual.
+        HStack {
             Button { player.toggleShuffle() } label: {
                 Image(systemName: "shuffle")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(player.state.shuffle ? Color.neonPink : Color.textMid)
             }
-            Button { player.prev() } label: {
-                Image(systemName: "backward.fill").font(.system(size: 30))
-                    .foregroundStyle(.white)
+            Spacer()
+            HStack(spacing: 8) {
+                Button { player.prev() } label: {
+                    Image(systemName: "backward.fill").font(.system(size: 30))
+                        .foregroundStyle(.white)
+                }
+                Button { player.togglePlay() } label: {
+                    Image(systemName: player.state.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 38)).foregroundStyle(.white)
+                        .frame(width: 76, height: 76)
+                        .background(Circle().fill(Color.neonPink))
+                        .shadow(color: .neonPink.opacity(0.7), radius: 18, y: 0)
+                }
+                Button { player.next() } label: {
+                    Image(systemName: "forward.fill").font(.system(size: 30))
+                        .foregroundStyle(.white)
+                }
             }
-            Button { player.togglePlay() } label: {
-                Image(systemName: player.state.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 38)).foregroundStyle(.white)
-                    .frame(width: 76, height: 76)
-                    .background(Circle().fill(Color.neonPink))
-                    .shadow(color: .neonPink.opacity(0.7), radius: 18, y: 0)
-            }
-            Button { player.next() } label: {
-                Image(systemName: "forward.fill").font(.system(size: 30))
-                    .foregroundStyle(.white)
-            }
+            Spacer()
             Button { player.toggleRepeat() } label: {
                 Image(systemName: player.state.repeatMode == 2 ? "repeat.1" : "repeat")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(player.state.repeatMode == 0 ? Color.textMid : Color.neonPink)
             }
-            Button { showQueue = true } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.textMid)
-            }
         }
+        .padding(.horizontal, 18)
     }
 
     private func bottomActions(isFav: Bool, trackId: Int64) -> some View {
-        HStack(spacing: 14) {
-            Button {
-                FavToggle.toggle(trackId: trackId, favRepo: favorites)
-            } label: {
-                Image(systemName: isFav ? "heart.fill" : "heart")
-                    .font(.system(size: 20))
-                    .foregroundStyle(isFav ? Color.neonPink : Color.textMid)
-                    .padding(10)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-            }
-
-            Button { onAddToPlaylist() } label: {
-                Image(systemName: "plus.rectangle.on.rectangle")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Color.textMid)
-                    .padding(10)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-            }
-
-            Button { showLyrics.toggle() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "text.alignleft")
-                    Text("Letra").font(.system(size: 12, weight: .semibold))
+        // Layout paridad Android: pill "Letra" centrada arriba, luego 2 filas
+        // SpaceEvenly de acciones (4 + 3). El helper circleBtn unifica el estilo.
+        VStack(spacing: 10) {
+            HStack {
+                Spacer()
+                Button { showLyrics.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "text.alignleft")
+                        Text("Letra").font(.system(size: 12, weight: .semibold))
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Capsule().fill(showLyrics ? Color.neonPink : Color.white.opacity(0.08)))
+                    .foregroundStyle(.white)
+                    .shadow(color: showLyrics ? Color.neonPink.opacity(0.5) : .clear, radius: 8)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Capsule().fill(showLyrics ? Color.neonPink : Color.white.opacity(0.08)))
-                .foregroundStyle(.white)
-                .shadow(color: showLyrics ? Color.neonPink.opacity(0.5) : .clear, radius: 8)
+                Spacer()
             }
-
-            Button { showSleepTimer = true } label: {
-                Image(systemName: sleepTimer.isActive ? "moon.fill" : "moon")
-                    .font(.system(size: 20))
-                    .foregroundStyle(sleepTimer.isActive ? Color.neonCyan : Color.textMid)
-                    .padding(10)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
+            // FILA 1: Favorito · Añadir a playlist · Cargar playlist · Cola
+            HStack {
+                Spacer()
+                circleBtn(systemName: isFav ? "heart.fill" : "heart",
+                          tint: isFav ? Color.neonPink : Color.white.opacity(0.7)) {
+                    FavToggle.toggle(trackId: trackId, favRepo: favorites)
+                }
+                Spacer()
+                circleBtn(systemName: "plus.rectangle.on.rectangle") { onAddToPlaylist() }
+                Spacer()
+                circleBtn(systemName: "music.note.list") { onLoadPlaylist() }
+                Spacer()
+                circleBtn(systemName: "list.bullet") { showQueue = true }
+                Spacer()
             }
-
-            Button { showRecommend = true } label: {
-                Image(systemName: "paperplane")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Color.textMid)
-                    .padding(10)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-            }
-
-            Button { shareCurrent() } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Color.textMid)
-                    .padding(10)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
+            // FILA 2: Sleep timer · Recomendar · Compartir
+            HStack {
+                Spacer()
+                circleBtn(systemName: sleepTimer.isActive ? "moon.fill" : "moon",
+                          tint: sleepTimer.isActive ? Color.neonCyan : Color.white.opacity(0.7)) {
+                    showSleepTimer = true
+                }
+                Spacer()
+                circleBtn(systemName: "paperplane") { showRecommend = true }
+                Spacer()
+                circleBtn(systemName: "square.and.arrow.up") { shareCurrent() }
+                Spacer()
             }
         }
+        .padding(.horizontal, 18)
         .sheet(isPresented: $showQueue) {
             QueueSheet(onClose: { showQueue = false })
                 .presentationDetents([.medium, .large])
@@ -282,6 +336,20 @@ struct FullPlayer: View {
                     .presentationDetents([.medium, .large])
             }
         }
+    }
+
+    /// Botón circular 44×44 con icono SF Symbols. Réplica del Android `CircleBtn`.
+    private func circleBtn(systemName: String,
+                           tint: Color = Color.white.opacity(0.7),
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 20))
+                .foregroundStyle(tint)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
     }
 
     private func shareCurrent() {

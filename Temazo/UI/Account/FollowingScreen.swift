@@ -30,6 +30,11 @@ struct FollowingScreen: View {
             topBar
         }
         .task { await load() }
+        // Reload cada vez que la pantalla vuelve a aparecer (tras follow/unfollow
+        // en otra vista, push de back, etc.) — paridad con Android que también
+        // refresca onResume.
+        .onAppear { Task { await load() } }
+        .refreshable { await load() }
     }
 
     private var topBar: some View {

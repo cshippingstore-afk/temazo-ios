@@ -194,6 +194,12 @@ final class Player: NSObject, ObservableObject {
         // NO esperar al extractor: muchas canciones populares tienen signatureCipher
         // y el extractor falla — perderíamos segundos en vano. Mejor probar proxy ya
         // y dejar el extractor corriendo en background para futuros plays.
+        //
+        // TODO v2.21: Migrar a WKWebView + iframe oficial YouTube (igual que Android).
+        // El proxy actual está rate-limited por YouTube (29 KB/s) porque todos los
+        // users comparten la IP del VPS. WKWebView usa la IP del dispositivo del
+        // user → sin throttle. `_app_player.html` ya está preparado con el bridge
+        // webkit.messageHandlers.player. Es un refactor grande, se hace aparte.
         if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
             startWithURL(cached, track: track, source: "extractor-cache")
             // Calienta también para próxima vez
@@ -215,6 +221,11 @@ final class Player: NSObject, ObservableObject {
     private func startWithURL(_ url: URL, track: Track, source: String) {
         teardownObservers()
         print("[Player] streaming from \(source): \(url.absoluteString.prefix(80))…")
+
+        // CRÍTICO: activar AudioSession ANTES de crear el AVPlayer.
+        // Sin esto, en ciertos estados iOS el audio NO sale por altavoz aunque
+        // el player toque (bug "no se escucha" reportado).
+        AudioSessionManager.shared.ensureActive()
 
         let asset = AVURLAsset(url: url, options: [
             "AVURLAssetHTTPHeaderFieldsKey": [

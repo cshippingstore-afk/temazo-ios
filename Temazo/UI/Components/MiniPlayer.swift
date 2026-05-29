@@ -52,6 +52,15 @@ struct MiniPlayer: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.neonPink.opacity(0.4), lineWidth: 1))
                     .shadow(color: Color.neonPink.opacity(0.3), radius: 6)
+                    // Paridad Android: tap en el cover → álbum si existe, si no expand.
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if t.albumId != nil || (t.albumSlug?.isEmpty == false) {
+                            onCoverClick()
+                        } else {
+                            onExpand()
+                        }
+                    }
 
                     VStack(alignment: .leading, spacing: 1) {
                         MarqueeText(text: t.title,
@@ -60,6 +69,13 @@ struct MiniPlayer: View {
                         MarqueeText(text: t.artistName ?? "",
                                     font: .system(size: 12),
                                     color: Color.textLow, velocity: 25)
+                            // Paridad Android: tap en el nombre del artista → ArtistScreen.
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if t.artistId != nil || (t.artistSlug?.isEmpty == false) {
+                                    onArtistClick()
+                                }
+                            }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: 36)

@@ -11,6 +11,8 @@ struct TemazoTopBar: View {
     var onEventsClick: () -> Void = {}
     var onNewsClick: () -> Void = {}
 
+    @EnvironmentObject var auth: AuthRepository
+
     var body: some View {
         HStack(spacing: 8) {
             Image("logo_temazo")
@@ -53,16 +55,30 @@ struct TemazoTopBar: View {
                 }
             }
             .buttonStyle(.plain)
-            // Avatar — abre AccountScreen como detail
+            // Avatar — abre AccountScreen. Si hay foto, usar AsyncImage; si no, icono fallback.
             Button(action: onAvatarClick) {
                 ZStack {
-                    Circle()
-                        .fill(Color.neonPink.opacity(0.18))
-                    Circle()
-                        .stroke(Color.neonPink.opacity(0.5), lineWidth: 1)
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.neonPink)
+                    Circle().fill(Color.neonPink.opacity(0.18))
+                    Circle().stroke(Color.neonPink.opacity(0.5), lineWidth: 1)
+                    if let raw = auth.avatarUrl, !raw.isEmpty, let url = absoluteURL(raw) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let img):
+                                img.resizable().scaledToFill()
+                            default:
+                                Image(systemName: "person.fill")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(Color.neonPink)
+                            }
+                        }
+                        .clipShape(Circle())
+                        // id basado en la URL → si cambia, AsyncImage rebusca (no cache antigua)
+                        .id(raw)
+                    } else {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.neonPink)
+                    }
                 }
                 .frame(width: 40, height: 40)
             }
@@ -71,6 +87,14 @@ struct TemazoTopBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(height: 56)
+    }
+
+    /// Resuelve URLs relativas (que vienen de la API como `/uploads/avatar/123.jpg`)
+    /// añadiendo el host temazo.es. Si ya es absoluta, la devuelve tal cual.
+    private func absoluteURL(_ raw: String) -> URL? {
+        if raw.hasPrefix("http") { return URL(string: raw) }
+        let prefix = raw.hasPrefix("/") ? "" : "/"
+        return URL(string: "https://temazo.es\(prefix)\(raw)")
     }
 }
 

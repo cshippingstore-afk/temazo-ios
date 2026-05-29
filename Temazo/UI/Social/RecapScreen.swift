@@ -31,6 +31,10 @@ struct RecapScreen: View {
         }
         .background(Color.bgRoot)
         .task { await load() }
+        // Reload on appear → si el user vuelve a Recap tras escuchar canciones,
+        // las stats se actualizan en lugar de mostrar las stale.
+        .onAppear { Task { await load() } }
+        .refreshable { await load() }
     }
 
     private var header: some View {

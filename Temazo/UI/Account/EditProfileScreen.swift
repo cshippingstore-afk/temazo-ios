@@ -441,7 +441,15 @@ struct EditProfileScreen: View {
             do {
                 let r = try await TemazoAPI.shared.avatarUpload(imageData: data, mime: mime)
                 if r.ok {
-                    await MainActor.run { avatarUrl = r.avatarUrl }
+                    await MainActor.run {
+                        avatarUrl = r.avatarUrl
+                        // Propagar al store global → TopBar refresca al instante.
+                        if let raw = r.avatarUrl, !raw.isEmpty {
+                            let abs = raw.hasPrefix("http") ? raw
+                                : "https://temazo.es\(raw.hasPrefix("/") ? "" : "/")\(raw)"
+                            auth.setAvatarUrl(abs)
+                        }
+                    }
                 }
             } catch {}
         }
@@ -454,6 +462,7 @@ struct EditProfileScreen: View {
             let r = try await TemazoAPI.shared.avatarDelete()
             if r.ok == true {
                 avatarUrl = nil
+                auth.setAvatarUrl(nil)  // limpia el TopBar
             }
         } catch {}
     }

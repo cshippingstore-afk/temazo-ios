@@ -43,6 +43,9 @@ struct UsersListScreen: View {
         }
         .background(Color.bgRoot)
         .task { await load() }
+        // Recargar al volver (tras follow/unfollow desde otra vista).
+        .onAppear { Task { await load() } }
+        .refreshable { await load() }
     }
 
     private var header: some View {
