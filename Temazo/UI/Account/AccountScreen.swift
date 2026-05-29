@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 /// Mi cuenta — réplica visual del Android AccountScreen.
 /// Avatar circular grande clickable → galería para subir foto.
@@ -499,28 +500,51 @@ struct AccountScreen: View {
         uploadingAvatar = true
         Task {
             defer { uploadingAvatar = false; photoItem = nil }
-            guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else { return }
-            // Detectar mime básico por magic bytes
-            let mime: String = {
-                if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
-                if data.starts(with: [0xFF, 0xD8]) { return "image/jpeg" }
-                if data.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
-                if data.count > 12, data[0..<4] == Data([0x52,0x49,0x46,0x46]), data[8..<12] == Data([0x57,0x45,0x42,0x50]) { return "image/webp" }
-                return "image/jpeg"
-            }()
+            guard let raw = try? await item.loadTransferable(type: Data.self), !raw.isEmpty else {
+                print("[Avatar] PhotosPicker no devolvió data")
+                return
+            }
+            // iPhone manda fotos en HEIC por defecto. El backend NO acepta HEIC
+            // ('image/jpeg'|'image/png'|'image/webp'|'image/gif' only). Convertimos
+            // SIEMPRE a JPEG via UIImage para garantizar compatibilidad.
+            let imageData: Data
+            let mime: String
+            if raw.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+                imageData = raw; mime = "image/png"
+            } else if raw.starts(with: [0xFF, 0xD8]) {
+                imageData = raw; mime = "image/jpeg"
+            } else if raw.starts(with: [0x47, 0x49, 0x46]) {
+                imageData = raw; mime = "image/gif"
+            } else if raw.count > 12, raw[0..<4] == Data([0x52,0x49,0x46,0x46]),
+                      raw[8..<12] == Data([0x57,0x45,0x42,0x50]) {
+                imageData = raw; mime = "image/webp"
+            } else {
+                // HEIC / cualquier otro → re-encode a JPEG via UIImage
+                guard let img = UIImage(data: raw),
+                      let jpegData = img.jpegData(compressionQuality: 0.9) else {
+                    print("[Avatar] HEIC re-encode FAILED")
+                    return
+                }
+                imageData = jpegData
+                mime = "image/jpeg"
+                print("[Avatar] re-encoded \(raw.count)B HEIC/raw → \(jpegData.count)B JPEG")
+            }
             do {
-                let r = try await TemazoAPI.shared.avatarUpload(imageData: data, mime: mime)
+                let r = try await TemazoAPI.shared.avatarUpload(imageData: imageData, mime: mime)
+                print("[Avatar] upload result: ok=\(r.ok) url=\(r.avatarUrl ?? "nil") err=\(r.error ?? "nil")")
                 if r.ok {
                     // Push inmediato al store ANTES de loadProfile para que el TopBar
                     // refresque al instante (loadProfile puede tardar un tick).
-                    if let raw = r.avatarUrl, !raw.isEmpty {
-                        let abs = raw.hasPrefix("http") ? raw
-                            : "https://temazo.es\(raw.hasPrefix("/") ? "" : "/")\(raw)"
+                    if let url = r.avatarUrl, !url.isEmpty {
+                        let abs = url.hasPrefix("http") ? url
+                            : "https://temazo.es\(url.hasPrefix("/") ? "" : "/")\(url)"
                         auth.setAvatarUrl(abs)
                     }
                     await loadProfile()
                 }
-            } catch {}
+            } catch {
+                print("[Avatar] upload error: \(error)")
+            }
         }
     }
 }

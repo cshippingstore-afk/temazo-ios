@@ -50,11 +50,23 @@ final class Player: NSObject, ObservableObject {
                 AudioSessionManager.shared.ensureActive()
                 // NO arrancar silent loop con WKWebView — el AVAudioPlayer del silent
                 // loop TOMA el output de audio del proceso y el iframe se queda sin
-                // poder reproducir (bug "se escucha 1 seg y se para"). Android no usa
-                // silent loop porque su WebView mantiene el audio nativamente.
-                // El AudioSession .playback ya basta para background audio con WKWebView.
+                // poder reproducir. El AudioSession .playback basta para background.
             case "paused":
-                self.state.isPlaying = false
+                // iOS pausa el iframe automáticamente en los primeros 1-2 seg de
+                // reproducción por política autoplay del WebView. El HTML del player
+                // tiene auto-recovery (ensurePlayingAndUnmuted a los 200ms).
+                // No marcamos como "pausa real" hasta llevar >2s de reproducción.
+                // Y si llevamos <2s, forzamos un resume extra como red de seguridad.
+                if self.state.positionSec > 2 {
+                    self.state.isPlaying = false
+                } else if self.state.isPlaying {
+                    // Auto-recovery: dale al iframe un empujón más por si su
+                    // ensurePlayingAndUnmuted no triggerea.
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        self.engine.resume()
+                    }
+                }
             case "buffering":
                 self.state.loadingState = .extracting
             case "ended":

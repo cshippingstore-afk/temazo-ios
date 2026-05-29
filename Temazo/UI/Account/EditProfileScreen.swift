@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 /// Editar perfil: bio, playlist destacada (pinned) y avatar.
 /// Equivalente del Android `EditProfileScreen.kt`.
@@ -430,28 +431,49 @@ struct EditProfileScreen: View {
                     photoItem = nil
                 }
             }
-            guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else { return }
-            let mime: String = {
-                if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
-                if data.starts(with: [0xFF, 0xD8]) { return "image/jpeg" }
-                if data.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
-                if data.count > 12, data[0..<4] == Data([0x52,0x49,0x46,0x46]), data[8..<12] == Data([0x57,0x45,0x42,0x50]) { return "image/webp" }
-                return "image/jpeg"
-            }()
+            guard let raw = try? await item.loadTransferable(type: Data.self), !raw.isEmpty else {
+                print("[Avatar/Edit] PhotosPicker no devolvió data")
+                return
+            }
+            // iPhone manda HEIC por defecto → backend lo rechaza. Re-encode siempre
+            // a JPEG via UIImage si no es un formato soportado directamente.
+            let imageData: Data
+            let mime: String
+            if raw.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+                imageData = raw; mime = "image/png"
+            } else if raw.starts(with: [0xFF, 0xD8]) {
+                imageData = raw; mime = "image/jpeg"
+            } else if raw.starts(with: [0x47, 0x49, 0x46]) {
+                imageData = raw; mime = "image/gif"
+            } else if raw.count > 12, raw[0..<4] == Data([0x52,0x49,0x46,0x46]),
+                      raw[8..<12] == Data([0x57,0x45,0x42,0x50]) {
+                imageData = raw; mime = "image/webp"
+            } else {
+                guard let img = UIImage(data: raw),
+                      let jpegData = img.jpegData(compressionQuality: 0.9) else {
+                    print("[Avatar/Edit] HEIC re-encode FAILED")
+                    return
+                }
+                imageData = jpegData
+                mime = "image/jpeg"
+                print("[Avatar/Edit] re-encoded \(raw.count)B → \(jpegData.count)B JPEG")
+            }
             do {
-                let r = try await TemazoAPI.shared.avatarUpload(imageData: data, mime: mime)
+                let r = try await TemazoAPI.shared.avatarUpload(imageData: imageData, mime: mime)
+                print("[Avatar/Edit] result: ok=\(r.ok) url=\(r.avatarUrl ?? "nil") err=\(r.error ?? "nil")")
                 if r.ok {
                     await MainActor.run {
                         avatarUrl = r.avatarUrl
-                        // Propagar al store global → TopBar refresca al instante.
-                        if let raw = r.avatarUrl, !raw.isEmpty {
-                            let abs = raw.hasPrefix("http") ? raw
-                                : "https://temazo.es\(raw.hasPrefix("/") ? "" : "/")\(raw)"
+                        if let url = r.avatarUrl, !url.isEmpty {
+                            let abs = url.hasPrefix("http") ? url
+                                : "https://temazo.es\(url.hasPrefix("/") ? "" : "/")\(url)"
                             auth.setAvatarUrl(abs)
                         }
                     }
                 }
-            } catch {}
+            } catch {
+                print("[Avatar/Edit] upload error: \(error)")
+            }
         }
     }
 
