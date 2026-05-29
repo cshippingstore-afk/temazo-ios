@@ -21,19 +21,23 @@ final class AudioSessionManager {
         configured = true
         do {
             let session = AVAudioSession.sharedInstance()
+            // v2.33: mode .moviePlayback (NO .default) — confirmado que en Safari
+            // del iPhone el iframe funciona sin interrupciones. Safari usa
+            // moviePlayback mode para video web. Con .default + .longFormAudio
+            // policy iOS aplicaba reglas de "música pura" que pausaban el
+            // WKWebView que reproduce el iframe. moviePlayback es el modo
+            // standard de YouTube/Netflix/Safari para WKWebView con video.
             try session.setCategory(
                 .playback,
-                mode: .default,
-                policy: .longFormAudio,
+                mode: .moviePlayback,
                 options: [.allowAirPlay, .allowBluetoothA2DP]
             )
             try session.setActive(true, options: [])
             print("[AudioSession] configured \(session.category) mode=\(session.mode)")
         } catch {
-            // Fallback sin policy
             do {
                 let s = AVAudioSession.sharedInstance()
-                try s.setCategory(.playback, mode: .default,
+                try s.setCategory(.playback, mode: .moviePlayback,
                                   options: [.allowAirPlay, .allowBluetoothA2DP])
                 try s.setActive(true)
             } catch {
