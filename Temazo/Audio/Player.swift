@@ -28,6 +28,10 @@ final class Player: NSObject, ObservableObject {
     /// Flag para evitar doble next() entre AVPlayerItemDidPlayToEndTime y nuestro
     /// detector manual via positionSec ≥ durationSec - 0.4s.
     private var didAutoNext: Bool = false
+    /// v2.45: si true, esperamos al evento readyToPlay del AVPlayer para hacer
+    /// handoff desde el iframe (InstantStartEngine). Se setea en playTrack y
+    /// se limpia tras el handoff completado.
+    private var handoffPending: Bool = false
 
     override init() {
         super.init()
@@ -47,6 +51,13 @@ final class Player: NSObject, ObservableObject {
         state.loadingState = .extracting
         didAutoNext = false
         AudioSessionManager.shared.ensureActive()
+        // v2.45: ARRANQUE INSTANT vía iframe YT (~200ms). El AVPlayer arranca
+        // en paralelo MUTED y toma el relevo cuando esté readyToPlay (~500ms-1s).
+        // Tras handoff: AVPlayer es el único motor audible → bg sigue funcionando.
+        if let ytId = track.youtubeId, !ytId.isEmpty {
+            InstantStartEngine.shared.startInstant(ytId: ytId)
+            handoffPending = true
+        }
         startAVPlayback(for: track)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
@@ -81,6 +92,8 @@ final class Player: NSObject, ObservableObject {
     func pause() {
         print("[Player] pause() called")
         avPlayer?.pause()
+        // v2.45: si el iframe aún está sonando (handoff no ha pasado), pararlo
+        InstantStartEngine.shared.stopAfterHandoff()
         state.isPlaying = false
     }
 
@@ -176,6 +189,8 @@ final class Player: NSObject, ObservableObject {
         avPlayer?.pause()
         avPlayer?.replaceCurrentItem(with: nil)
         avPlayer = nil
+        InstantStartEngine.shared.stop()
+        handoffPending = false
         state = PlayerState()
     }
 
@@ -275,6 +290,8 @@ final class Player: NSObject, ObservableObject {
                     self.state.ready = true
                     self.state.loadingState = .ready
                     print("[Player] readyToPlay duration=\(self.state.durationSec)s")
+                    // v2.45: handoff iframe → AVPlayer (zero-gap)
+                    if self.handoffPending { self.performHandoff() }
                 case .failed:
                     let err = item.error?.localizedDescription ?? "unknown"
                     self.state.lastError = err
@@ -342,8 +359,41 @@ final class Player: NSObject, ObservableObject {
         }
 
         AudioSessionManager.shared.ensureActive()
+        // v2.45: si hay handoff pendiente (iframe sonando), AVPlayer arranca MUTED
+        // para no echo. El handoff (en readyToPlay) lo subirá a 1.0 tras seek.
+        if handoffPending {
+            p.volume = 0
+        } else {
+            p.volume = 1
+        }
         p.play()
         state.isPlaying = true
+    }
+
+    /// v2.45: handoff seamless desde iframe (audible) → AVPlayer (audible).
+    /// 1) Lee posición del iframe (lo que el user oye)
+    /// 2) Seek AVPlayer a esa posición exacta
+    /// 3) Sube volumen AVPlayer a 1.0 (ahora audible)
+    /// 4) Mute + pause iframe (zero-gap porque AVPlayer ya está en sync)
+    private func performHandoff() {
+        handoffPending = false
+        guard let avp = avPlayer else { return }
+        InstantStartEngine.shared.currentTime { [weak self] iframePos in
+            guard let self = self, let avp = self.avPlayer else { return }
+            if iframePos > 0.5 {
+                let cm = CMTime(seconds: iframePos, preferredTimescale: 600)
+                avp.seek(to: cm, toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity) { _ in
+                    avp.volume = 1.0
+                    InstantStartEngine.shared.stopAfterHandoff()
+                    print("[Player] handoff iframe→AVPlayer @ \(iframePos)s")
+                }
+            } else {
+                // iframe aún no había arrancado realmente — solo arrancar AVPlayer
+                avp.volume = 1.0
+                InstantStartEngine.shared.stopAfterHandoff()
+                print("[Player] handoff inmediato (iframe no arrancó)")
+            }
+        }
     }
 
     private func buildProxyURL(ytId: String) -> URL? {
