@@ -7,15 +7,36 @@ import UIKit
 ///
 /// La URL extraída tiene la IP del iPhone porque la request la hace el iPhone.
 /// AVPlayer puede usar esa URL directamente desde YouTube CDN, sin proxy VPS.
+///
+/// v2.48 — Optimizaciones percepción "instant":
+///   1. PERSISTENCIA: cache se guarda en UserDefaults entre sesiones de la app.
+///      Al relanzar Temazo, las URLs del último uso siguen disponibles sin extract.
+///   2. PREWARM AGRESIVO: prefetch() con concurrency cap (3) para no banar IP.
+///   3. SCROLL PREWARM: TrackRow.onAppear + delay 1s → si el row sigue visible,
+///      se extrae. Helper `prefetchWhenVisible(ytId:)` debounced.
 @MainActor
 final class YouTubeExtractor: NSObject {
     static let shared = YouTubeExtractor()
 
     private let session: URLSession
 
-    private struct CacheEntry { let url: URL; let timestamp: Date }
+    private struct CacheEntry: Codable {
+        let urlString: String
+        let timestamp: Date
+    }
     private var cache: [String: CacheEntry] = [:]
     private let cacheTTL: TimeInterval = 4 * 3600
+
+    // v2.48: persistencia
+    private static let persistKey = "YTExtractor.cache.v1"
+    private var saveTimer: Timer?
+
+    // v2.48: concurrency cap para prefetch agresivo
+    private let prefetchSemaphore: AsyncSemaphore = AsyncSemaphore(value: 3)
+    private var prefetchInFlight: Set<String> = []
+
+    // v2.48: scroll-based prewarm (debounce por ytId)
+    private var visibilityTasks: [String: Task<Void, Never>] = [:]
 
     enum ExtractorError: LocalizedError {
         case fetchFailed(Int)
@@ -42,6 +63,11 @@ final class YouTubeExtractor: NSObject {
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: cfg)
         super.init()
+        loadPersistedCache()
+        // Guardar al backgroundear por si user mata la app
+        NotificationCenter.default.addObserver(self, selector: #selector(savePersistedCacheNow),
+                                               name: UIApplication.didEnterBackgroundNotification,
+                                               object: nil)
     }
 
     func warmUp() { /* no-op: ya no usamos WKWebView */ }
@@ -49,7 +75,7 @@ final class YouTubeExtractor: NSObject {
     func cachedURL(for videoID: String) -> URL? {
         guard let e = cache[videoID] else { return nil }
         if Date().timeIntervalSince(e.timestamp) > cacheTTL { cache[videoID] = nil; return nil }
-        return e.url
+        return URL(string: e.urlString)
     }
 
     func extractStreamURL(videoID: String, timeoutSec: TimeInterval = 6) async throws -> URL {
@@ -70,17 +96,78 @@ final class YouTubeExtractor: NSObject {
         }
         let elapsed = Date().timeIntervalSince(started)
         print(String(format: "[YTExtractor] %@ extracted in %.2fs", videoID, elapsed))
-        cache[videoID] = CacheEntry(url: url, timestamp: Date())
+        cache[videoID] = CacheEntry(urlString: url.absoluteString, timestamp: Date())
+        schedulePersist()
         return url
     }
 
     /// Pre-resuelve URLs en background (fire-and-forget).
+    /// v2.48: añadido concurrency cap (3 simultáneas) y de-dup de in-flight.
     /// Llama esto cuando carga una lista de tracks → tap play instant para los pre-resueltos.
     func prefetch(videoIDs: [String]) {
-        for id in videoIDs where cache[id] == nil {
-            Task {
-                _ = try? await extractStreamURL(videoID: id, timeoutSec: 8)
+        for id in videoIDs where cachedURL(for: id) == nil && !prefetchInFlight.contains(id) {
+            prefetchInFlight.insert(id)
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                await self.prefetchSemaphore.wait()
+                _ = try? await self.extractStreamURL(videoID: id, timeoutSec: 8)
+                await self.prefetchSemaphore.signal()
+                self.prefetchInFlight.remove(id)
             }
+        }
+    }
+
+    /// v2.48: scroll-based prewarm. Llamar desde TrackRow.onAppear.
+    /// Solo extrae si el track sigue visible > 1s (anti scroll-through).
+    func prefetchWhenVisible(ytId: String) {
+        guard !ytId.isEmpty, cachedURL(for: ytId) == nil, visibilityTasks[ytId] == nil else { return }
+        let task = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if Task.isCancelled { return }
+            self?.prefetch(videoIDs: [ytId])
+            self?.visibilityTasks[ytId] = nil
+        }
+        visibilityTasks[ytId] = task
+    }
+
+    /// v2.48: llamar desde TrackRow.onDisappear para cancelar prewarms de rows que
+    /// dejaron de ser visibles antes de 1s (scroll rápido).
+    func cancelVisibilityPrefetch(ytId: String) {
+        visibilityTasks[ytId]?.cancel()
+        visibilityTasks[ytId] = nil
+    }
+
+    // MARK: - Persistencia v2.48
+
+    private func loadPersistedCache() {
+        guard let data = UserDefaults.standard.data(forKey: Self.persistKey) else { return }
+        do {
+            let decoded = try JSONDecoder().decode([String: CacheEntry].self, from: data)
+            // Filtrar entradas caducadas al cargar
+            let now = Date()
+            let fresh = decoded.filter { now.timeIntervalSince($0.value.timestamp) < cacheTTL }
+            cache = fresh
+            print("[YTExtractor] cache loaded: \(fresh.count) URLs (de \(decoded.count) guardadas)")
+        } catch {
+            print("[YTExtractor] cache load error: \(error)")
+        }
+    }
+
+    /// Guarda el cache con debounce de 2s para no hammerizar UserDefaults durante
+    /// rondas de prefetch.
+    private func schedulePersist() {
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.savePersistedCacheNow() }
+        }
+    }
+
+    @objc private func savePersistedCacheNow() {
+        do {
+            let data = try JSONEncoder().encode(cache)
+            UserDefaults.standard.set(data, forKey: Self.persistKey)
+        } catch {
+            print("[YTExtractor] cache save error: \(error)")
         }
     }
 
@@ -171,5 +258,21 @@ final class YouTubeExtractor: NSObject {
             idx = html.index(after: idx)
         }
         return nil
+    }
+}
+
+// MARK: - Async semaphore (Swift no la trae built-in)
+
+actor AsyncSemaphore {
+    private var value: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    init(value: Int) { self.value = value }
+    func wait() async {
+        if value > 0 { value -= 1; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func signal() {
+        if !waiters.isEmpty { waiters.removeFirst().resume() }
+        else { value += 1 }
     }
 }

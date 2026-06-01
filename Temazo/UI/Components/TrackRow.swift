@@ -26,6 +26,18 @@ struct TrackRow: View {
                         }
                     }
             )
+            // v2.48: scroll prewarm — si el row se mantiene visible >1s, prewarmea
+            // la URL del extractor. Tap-play tras eso = cache hit = instant.
+            .onAppear {
+                if let yt = track.youtubeId, !yt.isEmpty {
+                    YouTubeExtractor.shared.prefetchWhenVisible(ytId: yt)
+                }
+            }
+            .onDisappear {
+                if let yt = track.youtubeId, !yt.isEmpty {
+                    YouTubeExtractor.shared.cancelVisibilityPrefetch(ytId: yt)
+                }
+            }
     }
 
     @ViewBuilder
