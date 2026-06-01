@@ -103,6 +103,15 @@ final class Player: NSObject, ObservableObject {
         state.queue.append(track)
     }
 
+    /// v2.46: helper que monta el iframe + marca handoff pendiente
+    /// para que el cambio de track use el mismo flujo instant de playTrack().
+    private func instantBootFor(_ track: Track) {
+        if let ytId = track.youtubeId, !ytId.isEmpty {
+            InstantStartEngine.shared.startInstant(ytId: ytId)
+            handoffPending = true
+        }
+    }
+
     func next() {
         guard !state.queue.isEmpty else { return }
 
@@ -114,6 +123,7 @@ final class Player: NSObject, ObservableObject {
             state.durationSec = Float(t.durationSec ?? 0)
             state.loadingState = .extracting
             didAutoNext = false
+            instantBootFor(t)
             startAVPlayback(for: t)
             Task { try? await TemazoAPI.shared.historyAdd(t.id) }
             return
@@ -135,6 +145,7 @@ final class Player: NSObject, ObservableObject {
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
         didAutoNext = false
+        instantBootFor(t)
         startAVPlayback(for: t)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
@@ -150,6 +161,7 @@ final class Player: NSObject, ObservableObject {
         state.durationSec = Float(t.durationSec ?? 0)
         state.loadingState = .extracting
         didAutoNext = false
+        instantBootFor(t)
         startAVPlayback(for: t)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(t.id) }
