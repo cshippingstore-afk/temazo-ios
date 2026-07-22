@@ -29,6 +29,7 @@ struct AlbumScreen: View {
                         headerView(a)
                         if !tracks.isEmpty {
                             playButton
+                            downloadAlbumButton
                             ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, t in
                                 trackRow(t, idx: idx + 1)
                                     .onTapGesture { onPlayTracks(tracks, idx) }
@@ -116,6 +117,38 @@ struct AlbumScreen: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
+    }
+
+    /// BETA v1.1: descarga todos los tracks del álbum en background.
+    /// Visualmente estado: hasDownloads (todos ya descargados) → check verde
+    /// idle → botón "Descargar álbum" (icono ↓ + texto)
+    @ViewBuilder
+    private var downloadAlbumButton: some View {
+        let ytIds = tracks.compactMap { $0.youtubeId }.filter { !$0.isEmpty }
+        let allDownloaded = !ytIds.isEmpty
+            && ytIds.allSatisfy { OfflineLibrary.shared.isDownloaded($0) }
+        Button {
+            if !allDownloaded {
+                _ = DownloadManager.shared.downloadAll(tracks)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: allDownloaded ? "checkmark.circle.fill" : "arrow.down.circle")
+                    .font(.system(size: 15))
+                Text(allDownloaded ? "Álbum descargado" : "Descargar álbum")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(allDownloaded ? Color.green : Color.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(allDownloaded
+                        ? Color.green.opacity(0.15)
+                        : Color.white.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
+        }
+        .disabled(allDownloaded)
     }
 
     private func trackRow(_ t: Track, idx: Int) -> some View {

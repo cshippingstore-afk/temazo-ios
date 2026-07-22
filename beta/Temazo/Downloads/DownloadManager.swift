@@ -110,6 +110,22 @@ final class DownloadManager: NSObject, ObservableObject {
         }
     }
 
+    /// BETA v1.1: descarga en cadena una lista completa (álbum / playlist entera).
+    /// Filtra los ya descargados y los sin youtubeId. Respeta el techo maxConcurrent
+    /// y wifiOnly automáticamente porque delega en downloadTrackAutoResolve.
+    /// Devuelve cuántos se encolaron efectivamente (útil para toast UI).
+    @discardableResult
+    func downloadAll(_ tracks: [Track]) -> Int {
+        var enqueued = 0
+        for t in tracks {
+            guard let yt = t.youtubeId, !yt.isEmpty else { continue }
+            if OfflineLibrary.shared.isDownloaded(yt) { continue }
+            downloadTrackAutoResolve(t)
+            enqueued += 1
+        }
+        return enqueued
+    }
+
     /// Cancela y elimina.
     func cancel(youtubeId: String) {
         activeTasks[youtubeId]?.cancel()

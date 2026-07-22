@@ -136,8 +136,31 @@ struct PublicPlaylistScreen: View {
                     .overlay(Capsule().stroke(Color.white.opacity(0.3)))
                     .foregroundStyle(.white)
             }
+
+            downloadPublicAllButton(tracks: d.tracks ?? [])
         }
         .padding(.horizontal, 18)
+    }
+
+    /// BETA v1.1: descargar todos los tracks de esta playlist pública.
+    @ViewBuilder
+    private func downloadPublicAllButton(tracks: [Track]) -> some View {
+        let ytIds = tracks.compactMap { $0.youtubeId }.filter { !$0.isEmpty }
+        let allDownloaded = !ytIds.isEmpty
+            && ytIds.allSatisfy { OfflineLibrary.shared.isDownloaded($0) }
+        Button {
+            if !allDownloaded {
+                _ = DownloadManager.shared.downloadAll(tracks)
+            }
+        } label: {
+            Image(systemName: allDownloaded ? "checkmark.circle.fill" : "arrow.down.circle")
+                .font(.system(size: 14, weight: .bold))
+                .padding(10)
+                .overlay(Capsule().stroke(
+                    allDownloaded ? Color.green.opacity(0.6) : Color.white.opacity(0.3)))
+                .foregroundStyle(allDownloaded ? Color.green : Color.white)
+        }
+        .disabled(allDownloaded || tracks.isEmpty)
     }
 
     private func load() async {
@@ -155,8 +178,16 @@ struct PublicPlaylistScreen: View {
 
     private func toggleFollow() async {
         guard let id = data?.playlist?.id else { return }
+        let wasFollowing = data?.following == true
         _ = try? await TemazoAPI.shared.playlistFollowToggle(id)
         await load()
+        // BETA v1.1: si acaba de pasar de NO-siguiendo a siguiendo, auto-descarga
+        // todos los tracks (respeta WiFi guard). Al dejar de seguir NO borra descargas
+        // — el user decide en la pantalla "Descargas" si quiere liberar espacio.
+        if !wasFollowing && data?.following == true, let tracks = data?.tracks {
+            let n = DownloadManager.shared.downloadAll(tracks)
+            print("[PublicPlaylist] follow → encoladas \(n) descargas")
+        }
     }
 
     private func duplicate() async {

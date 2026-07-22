@@ -109,18 +109,21 @@ struct PlaylistDetailScreen: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
 
-                            Button(action: {
-                                if !tracks.isEmpty { onPlay(tracks[0], tracks, 0) }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "play.fill")
-                                    Text("Reproducir todo").fontWeight(.bold)
+                            HStack(spacing: 10) {
+                                Button(action: {
+                                    if !tracks.isEmpty { onPlay(tracks[0], tracks, 0) }
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "play.fill")
+                                        Text("Reproducir todo").fontWeight(.bold)
+                                    }
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 22).padding(.vertical, 12)
+                                    .background(Color.neonPink, in: Capsule())
                                 }
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 22).padding(.vertical, 12)
-                                .background(Color.neonPink, in: Capsule())
+                                downloadAllButton
+                                Spacer()
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
                         }
                         .padding(20)
@@ -201,6 +204,29 @@ struct PlaylistDetailScreen: View {
         TemazoShare.sharePlaylist(id: playlistId,
                                   name: currentName.isEmpty ? (playlistName ?? "") : currentName,
                                   ownerUsername: nil)
+    }
+
+    /// BETA v1.1: botón capsular para descargar todos los tracks de la playlist.
+    @ViewBuilder
+    private var downloadAllButton: some View {
+        let ytIds = tracks.compactMap { $0.youtubeId }.filter { !$0.isEmpty }
+        let allDownloaded = !ytIds.isEmpty
+            && ytIds.allSatisfy { OfflineLibrary.shared.isDownloaded($0) }
+        Button {
+            if !allDownloaded {
+                _ = DownloadManager.shared.downloadAll(tracks)
+            }
+        } label: {
+            Image(systemName: allDownloaded ? "checkmark.circle.fill" : "arrow.down.circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(allDownloaded ? Color.green : Color.white)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(allDownloaded
+                            ? Color.green.opacity(0.15)
+                            : Color.white.opacity(0.12),
+                            in: Capsule())
+        }
+        .disabled(allDownloaded || tracks.isEmpty)
     }
 
     @ViewBuilder
