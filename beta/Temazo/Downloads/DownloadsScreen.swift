@@ -18,7 +18,7 @@ struct DownloadsScreen: View {
                 trackList
             }
         }
-        .background(Color.bgPrimary.ignoresSafeArea())
+        .background(Color.bgRoot.ignoresSafeArea())
         .navigationBarHidden(true)
     }
 

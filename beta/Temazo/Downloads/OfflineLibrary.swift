@@ -68,9 +68,14 @@ final class OfflineLibrary: ObservableObject {
 
     /// URL de destino donde el DownloadManager debe escribir el archivo m4a.
     /// El directorio se crea si no existe.
-    func destinationURL(for youtubeId: String) -> URL {
-        try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
-        return downloadsDir.appendingPathComponent("\(youtubeId).m4a")
+    /// nonisolated porque URLSessionDownloadDelegate corre en cola no-main
+    /// y debe mover el archivo SÍNCRONAMENTE antes de que URLSession lo purge.
+    /// Solo toca FileManager que es thread-safe para esta operación.
+    nonisolated func destinationURL(for youtubeId: String) -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("downloads", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("\(youtubeId).m4a")
     }
 
     // MARK: - Escritura
