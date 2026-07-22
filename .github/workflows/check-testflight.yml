@@ -50,10 +50,11 @@ jobs:
           d = show("https://api.appstoreconnect.apple.com/v1/apps",
                    "1. App Temazo Beta",
                    {"filter[bundleId]": "es.temazo.app.beta"})
+          import sys
           apps = d.get("data", [])
           if not apps:
               print("APP NO ENCONTRADA")
-              return
+              sys.exit(0)
           app = apps[0]
           app_id = app["id"]
           print(json.dumps(app.get("attributes"), indent=2))
