@@ -22,7 +22,7 @@ struct TrackRow: View {
                 DragGesture(minimumDistance: 30)
                     .onEnded { v in
                         if v.translation.width < -120 && abs(v.translation.height) < 40 {
-                            FavToggle.toggle(trackId: track.id, favRepo: favorites)
+                            FavToggle.toggle(track, favRepo: favorites)
                         }
                     }
             )
@@ -78,7 +78,7 @@ struct TrackRow: View {
                 Image(systemName: favorites.contains(track.id) ? "heart.fill" : "heart")
                     .foregroundStyle(favorites.contains(track.id) ? Color.neonPink : Color.textLow)
                     .font(.system(size: 14))
-                    .onTapGesture { favorites.toggle(track.id) }
+                    .onTapGesture { FavToggle.toggle(track, favRepo: favorites) }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(

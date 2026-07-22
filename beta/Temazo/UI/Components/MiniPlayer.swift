@@ -91,9 +91,9 @@ struct MiniPlayer: View {
 
                     Spacer().frame(width: 2)
 
-                    // Corazón (Me gusta)
+                    // Corazón (Me gusta) — beta: dispara auto-download al favoritar
                     Button(action: {
-                        FavToggle.toggle(trackId: t.id, favRepo: favorites)
+                        FavToggle.toggle(t, favRepo: favorites)
                     }) {
                         Image(systemName: isFav ? "heart.fill" : "heart")
                             .font(.system(size: 18))

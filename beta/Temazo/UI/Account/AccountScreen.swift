@@ -20,6 +20,7 @@ struct AccountScreen: View {
     var onUsersFollowingClick: (() -> Void)? = nil    // usuarios que sigo
     var onUsersFollowersClick: (() -> Void)? = nil    // quién me sigue
     var onUserSearchClick: (() -> Void)? = nil
+    var onDownloadsClick: (() -> Void)? = nil          // BETA v1: acceso a offline library
 
     @State private var showRegister = false
     @State private var showSettings = false
@@ -327,6 +328,12 @@ struct AccountScreen: View {
             }
             actionRow(icon: "music.note.list", label: "Playlists que sigo") {
                 NotificationCenter.default.post(name: .temazoOpenPlaylistsFollowing, object: nil)
+            }
+            // BETA v1 — acceso a librería offline
+            actionRow(icon: "arrow.down.circle.fill", label: "Descargas",
+                      badge: OfflineLibrary.shared.tracks.count > 0
+                             ? OfflineLibrary.shared.tracks.count : nil) {
+                onDownloadsClick?()
             }
             actionRow(icon: "bell.fill", label: "Notificaciones") { onNotificationsClick?() }
             actionRow(icon: "lock.shield", label: "Privacidad") {

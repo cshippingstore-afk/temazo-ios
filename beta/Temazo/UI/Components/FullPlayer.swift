@@ -68,7 +68,7 @@ struct FullPlayer: View {
                         transportRow()
                             .padding(.vertical, 8)
 
-                        bottomActions(isFav: isFav, trackId: t.id)
+                        bottomActions(isFav: isFav, track: t)
                             .padding(.bottom, 24)
                     }
                 }
@@ -275,7 +275,7 @@ struct FullPlayer: View {
         .padding(.horizontal, 18)
     }
 
-    private func bottomActions(isFav: Bool, trackId: Int64) -> some View {
+    private func bottomActions(isFav: Bool, track: Track) -> some View {
         // Layout paridad Android: pill "Letra" centrada arriba, luego 2 filas
         // SpaceEvenly de acciones (4 + 3). El helper circleBtn unifica el estilo.
         VStack(spacing: 10) {
@@ -298,7 +298,7 @@ struct FullPlayer: View {
                 Spacer()
                 circleBtn(systemName: isFav ? "heart.fill" : "heart",
                           tint: isFav ? Color.neonPink : Color.white.opacity(0.7)) {
-                    FavToggle.toggle(trackId: trackId, favRepo: favorites)
+                    FavToggle.toggle(track, favRepo: favorites)
                 }
                 Spacer()
                 circleBtn(systemName: "plus.rectangle.on.rectangle") { onAddToPlaylist() }

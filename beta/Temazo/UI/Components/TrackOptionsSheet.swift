@@ -41,6 +41,9 @@ struct TrackOptionsSheet: View {
             row(icon: "text.line.first.and.arrowtriangle.forward", label: "Añadir a la cola") {
                 onAddToQueue(); onDismiss()
             }
+            // BETA v1 — botón de descarga manual (independiente del corazón)
+            downloadRow
+
             if track.artistId != nil || (track.artistSlug?.isEmpty == false) {
                 row(icon: "person.fill", label: "Ir al artista") {
                     onGoToArtist(); onDismiss()
@@ -63,6 +66,38 @@ struct TrackOptionsSheet: View {
         }
         .background(Color(red: 0.10, green: 0.04, blue: 0.18))
         .presentationDetents([.fraction(0.55), .medium])
+    }
+
+    /// BETA v1: fila específica para descargar / borrar descarga.
+    /// Estado depende de OfflineLibrary + DownloadManager.
+    @ViewBuilder
+    private var downloadRow: some View {
+        if let yt = track.youtubeId, !yt.isEmpty {
+            let isDownloaded = OfflineLibrary.shared.isDownloaded(yt)
+            let downloading = DownloadManager.shared.states[yt].map { state -> Bool in
+                if case .downloading = state { return true }
+                if case .queued = state { return true }
+                return false
+            } ?? false
+            if isDownloaded {
+                row(icon: "checkmark.circle.fill",
+                    label: "Descargada — quitar",
+                    tint: .green) {
+                    OfflineLibrary.shared.remove(youtubeId: yt); onDismiss()
+                }
+            } else if downloading {
+                row(icon: "hourglass",
+                    label: "Descargando…",
+                    tint: .yellow) { onDismiss() }
+            } else {
+                row(icon: "arrow.down.circle",
+                    label: "Descargar canción",
+                    tint: .white) {
+                    DownloadManager.shared.downloadTrackAutoResolve(track)
+                    onDismiss()
+                }
+            }
+        }
     }
 
     @ViewBuilder

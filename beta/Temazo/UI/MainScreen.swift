@@ -24,6 +24,8 @@ enum Detail: Hashable {
     case blockedUsers
     case privacy
     case notificationSettings
+    /// BETA v1: pantalla "Descargas" con el catálogo offline
+    case downloads
 }
 
 extension Notification.Name {
@@ -181,7 +183,7 @@ struct MainScreen: View {
                 track: t,
                 isFavorite: favorites.contains(t.id),
                 onDismiss: { optionsBus.dismiss() },
-                onToggleFav: { FavToggle.toggle(trackId: t.id, favRepo: favorites) },
+                onToggleFav: { FavToggle.toggle(t, favRepo: favorites) },
                 onAddToPlaylist: {
                     if auth.currentUser == nil {
                         showToast("Inicia sesión para añadir a playlists")
@@ -393,6 +395,9 @@ struct MainScreen: View {
                 },
                 onUserSearchClick: {
                     detailStack.append(.userSearch)
+                },
+                onDownloadsClick: {
+                    detailStack.append(.downloads)
                 }
             )
         case .playlist(let id, let name, let liked):
@@ -549,6 +554,8 @@ struct MainScreen: View {
                 onEventsClick: { detailStack.append(.events) },
                 onNewsClick: { detailStack.append(.news) }
             )
+        case .downloads:
+            DownloadsScreen()
         }
     }
 
