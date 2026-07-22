@@ -103,52 +103,30 @@ struct DownloadsScreen: View {
     }
 
     private func playTrack(from entry: OfflineLibrary.Entry) {
-        // Reconstruir un Track a partir del metadata almacenado
-        let track = Track(
-            id: Int(entry.track_id),
-            title: entry.title,
-            slug: nil,
-            youtube_id: entry.youtube_id,
-            spotify_id: nil,
-            artist_id: nil,
-            artist_name: entry.artist_name,
-            album: entry.album,
-            album_id: nil,
-            album_slug: nil,
-            cover_medium: entry.cover_url,
-            cover_large: entry.cover_url,
-            duration_sec: entry.duration_sec
-        )
-        // Cola = todos los descargados en orden
-        let queue = lib.tracks.map { e in
-            Track(
-                id: Int(e.track_id), title: e.title, slug: nil,
-                youtube_id: e.youtube_id, spotify_id: nil,
-                artist_id: nil, artist_name: e.artist_name,
-                album: e.album, album_id: nil, album_slug: nil,
-                cover_medium: e.cover_url, cover_large: e.cover_url,
-                duration_sec: e.duration_sec
-            )
-        }
+        let track = Self.trackFromEntry(entry)
+        let queue = lib.tracks.map(Self.trackFromEntry)
         let idx = queue.firstIndex(where: { $0.youtubeId == entry.youtube_id }) ?? 0
         player.playTrack(track, queue: queue, index: idx, source: "downloads")
     }
 
     private func refreshOld() {
         for entry in lib.tracksNeedingRefresh {
-            // Re-download: borra el archivo actual y lo vuelve a bajar
-            // (auto-encolamos el download)
             lib.remove(youtubeId: entry.youtube_id)
-            let track = Track(
-                id: Int(entry.track_id), title: entry.title, slug: nil,
-                youtube_id: entry.youtube_id, spotify_id: nil,
-                artist_id: nil, artist_name: entry.artist_name,
-                album: entry.album, album_id: nil, album_slug: nil,
-                cover_medium: entry.cover_url, cover_large: entry.cover_url,
-                duration_sec: entry.duration_sec
-            )
-            dl.downloadTrackAutoResolve(track)
+            dl.downloadTrackAutoResolve(Self.trackFromEntry(entry))
         }
+    }
+
+    private static func trackFromEntry(_ entry: OfflineLibrary.Entry) -> Track {
+        Track(
+            id: entry.track_id,
+            title: entry.title,
+            artistName: entry.artist_name,
+            album: entry.album,
+            coverMedium: entry.cover_url,
+            coverLarge: entry.cover_url,
+            youtubeId: entry.youtube_id,
+            durationSec: entry.duration_sec
+        )
     }
 }
 

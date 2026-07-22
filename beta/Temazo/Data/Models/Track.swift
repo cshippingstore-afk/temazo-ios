@@ -44,6 +44,50 @@ struct Track: Codable, Identifiable, Hashable {
         case isNew = "is_new"
     }
 
+    init(id: Int64,
+         title: String,
+         slug: String? = nil,
+         artistName: String? = nil,
+         artistSlug: String? = nil,
+         artistId: Int64? = nil,
+         album: String? = nil,
+         albumId: Int64? = nil,
+         albumSlug: String? = nil,
+         cover: String? = nil,
+         coverMedium: String? = nil,
+         coverLarge: String? = nil,
+         artistImageMedium: String? = nil,
+         youtubeId: String? = nil,
+         duration: String? = nil,
+         durationSec: Int? = nil,
+         popularity: Int? = nil,
+         position: Int? = nil,
+         prevPosition: Int? = nil,
+         delta: Int? = nil,
+         isNew: Bool? = nil) {
+        self.id = id
+        self.title = title
+        self.slug = slug
+        self.artistName = artistName
+        self.artistSlug = artistSlug
+        self.artistId = artistId
+        self.album = album
+        self.albumId = albumId
+        self.albumSlug = albumSlug
+        self.cover = cover
+        self.coverMedium = coverMedium
+        self.coverLarge = coverLarge
+        self.artistImageMedium = artistImageMedium
+        self.youtubeId = youtubeId
+        self.duration = duration
+        self.durationSec = durationSec
+        self.popularity = popularity
+        self.position = position
+        self.prevPosition = prevPosition
+        self.delta = delta
+        self.isNew = isNew
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // id puede venir como Int o String; intenta ambos
