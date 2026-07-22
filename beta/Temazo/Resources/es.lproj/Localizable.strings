@@ -1,0 +1,40 @@
+/* Tabs */
+"tab.home" = "Inicio";
+"tab.search" = "Buscar";
+"tab.account" = "Mi cuenta";
+
+/* Player */
+"player.now_playing" = "REPRODUCIENDO";
+"player.lyrics" = "Letra";
+"player.lyrics_unavailable" = "Letra no disponible";
+"player.queue" = "Cola";
+
+/* Auth */
+"auth.welcome_title" = "🎵 Bienvenido a Temazo";
+"auth.welcome_subtitle" = "Inicia sesión para guardar favoritos y playlists";
+"auth.login" = "Iniciar sesión";
+"auth.create" = "Crear cuenta";
+"auth.email" = "Email";
+"auth.password" = "Contraseña";
+"auth.password_hint" = "Mín 8 caracteres con un número";
+"auth.birthdate" = "Fecha nacimiento";
+"auth.gender_m" = "Hombre";
+"auth.gender_f" = "Mujer";
+"auth.gender_o" = "Otro";
+
+/* Search */
+"search.placeholder" = "Buscar canción, artista, álbum…";
+"search.min_chars" = "Escribe al menos 2 letras para buscar";
+"search.no_results" = "Sin resultados para “%@”";
+
+/* Settings */
+"settings.title" = "Ajustes";
+"settings.section.playback" = "Reproducción";
+"settings.crossfade.title" = "Crossfade entre canciones";
+"settings.crossfade.subtitle" = "Transición suave entre temas, sin silencios";
+"settings.more_coming" = "Más ajustes próximamente";
+
+/* Errors */
+"error.email_invalid" = "Email no válido";
+"error.password_weak" = "Contraseña débil. Mín 8 caracteres con un número";
+"error.invalid_credentials" = "Email o contraseña incorrectos";

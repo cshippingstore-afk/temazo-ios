@@ -1,0 +1,53 @@
+name: TemazoBeta
+options:
+  bundleIdPrefix: es.temazo
+  deploymentTarget:
+    iOS: '17.0'
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  xcodeVersion: '16.0'
+
+settings:
+  base:
+    SWIFT_VERSION: '5.10'
+    DEVELOPMENT_TEAM: 4B8U4JJQ93
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: '1'
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.0.0-beta1: primer build de la app SEPARADA con offline mode
+    # Bundle: es.temazo.app.beta (aparece como app aparte en el iPhone junto a la estable)
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: '-Onone'
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: '-O'
+
+targets:
+  TemazoBeta:
+    type: application
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - path: Temazo
+    resources:
+      - path: Temazo/Resources
+    # Info.plist mantenido manual (garantiza UIBackgroundModes audio siempre)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: es.temazo.app.beta
+        PRODUCT_NAME: Temazo Beta
+        TARGETED_DEVICE_FAMILY: '1'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: YES
+        INFOPLIST_FILE: Temazo/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: Temazo Beta App Store Distribution
+          DEVELOPMENT_TEAM: 4B8U4JJQ93
+        Debug:
+          CODE_SIGN_STYLE: Automatic

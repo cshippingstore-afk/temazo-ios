@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:temazo.es</string>
+		<string>applinks:www.temazo.es</string>
+	</array>
+	<!-- aps-environment se añade en v2.19 cuando se active capability Push Notifications
+	     en App ID es.temazo.app + regenerar provisioning profile -->
+</dict>
+</plist>
