@@ -1,0 +1,100 @@
+name: Check TestFlight Beta status
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Query App Store Connect API for Temazo Beta
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, json, sys, os
+          key_id = os.environ['KEY_ID']
+          issuer_id = os.environ['ISSUER_ID']
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          payload = {
+              "iss": issuer_id,
+              "iat": int(time.time()),
+              "exp": int(time.time()) + 600,
+              "aud": "appstoreconnect-v1"
+          }
+          token = jwt.encode(payload, key, algorithm="ES256", headers={"kid": key_id, "typ": "JWT"})
+          headers = {"Authorization": f"Bearer {token}"}
+
+          print("=" * 60)
+          print("1. Buscando app con bundle es.temazo.app.beta")
+          print("=" * 60)
+          r = requests.get("https://api.appstoreconnect.apple.com/v1/apps",
+                           headers=headers,
+                           params={"filter[bundleId]": "es.temazo.app.beta"})
+          data = r.json()
+          apps = data.get("data", [])
+          if not apps:
+              print("APP NO ENCONTRADA en App Store Connect!")
+              print("¿Bundle exacto en App Store Connect es 'es.temazo.app.beta'?")
+              print("Apps que sí existen en la cuenta:")
+              r2 = requests.get("https://api.appstoreconnect.apple.com/v1/apps",
+                                headers=headers, params={"limit": 20})
+              for a in r2.json().get("data", []):
+                  attr = a.get("attributes", {})
+                  print(f"  - {attr.get('name')} · bundle={attr.get('bundleId')} · sku={attr.get('sku')}")
+              sys.exit(0)
+          app = apps[0]
+          app_id = app["id"]
+          attr = app["attributes"]
+          print(f"✓ Encontrada: {attr.get('name')}")
+          print(f"  App ID: {app_id}")
+          print(f"  Bundle: {attr.get('bundleId')}")
+          print(f"  SKU: {attr.get('sku')}")
+
+          print()
+          print("=" * 60)
+          print("2. Builds subidos (últimos 20)")
+          print("=" * 60)
+          r = requests.get(f"https://api.appstoreconnect.apple.com/v1/apps/{app_id}/builds",
+                           headers=headers,
+                           params={"limit": 20, "sort": "-uploadedDate"})
+          builds = r.json().get("data", [])
+          if not builds:
+              print("NO HAY BUILDS todavía. El upload puede estar en cola en Apple.")
+              print("Espera 5-10 min y reintenta este workflow.")
+              sys.exit(0)
+          for b in builds:
+              ba = b["attributes"]
+              print(f"  Build {ba.get('version')} ({ba.get('processingState')})")
+              print(f"    uploaded: {ba.get('uploadedDate')}")
+              print(f"    expires:  {ba.get('expirationDate')}")
+              print(f"    expired?  {ba.get('expired')}")
+              print(f"    valid?    {ba.get('valid')}")
+              print(f"    usesNonExemptEncryption: {ba.get('usesNonExemptEncryption')}")
+              print(f"    minOsVersion: {ba.get('minOsVersion')}")
+              print(f"    iconAssetToken: {'yes' if ba.get('iconAssetToken') else 'no'}")
+              print()
+
+          print("=" * 60)
+          print("3. Beta App Review submissions")
+          print("=" * 60)
+          r = requests.get(f"https://api.appstoreconnect.apple.com/v1/apps/{app_id}/betaAppReviewDetail",
+                           headers=headers)
+          rev = r.json().get("data")
+          if rev:
+              print(json.dumps(rev.get("attributes", {}), indent=2))
+          else:
+              print("Sin beta review detail (normal si no habéis metido external testers)")
+          PYEOF
