@@ -1,0 +1,123 @@
+name: Fix TestFlight - finalizar asignaciones (v2)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Assign builds + add tester
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, json, os, sys
+          key_id = os.environ['KEY_ID']
+          issuer_id = os.environ['ISSUER_ID']
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          payload = {"iss": issuer_id, "iat": int(time.time()),
+                     "exp": int(time.time()) + 600, "aud": "appstoreconnect-v1"}
+          token = jwt.encode(payload, key, algorithm="ES256",
+                             headers={"kid": key_id, "typ": "JWT"})
+          H = {"Authorization": f"Bearer {token}",
+               "Content-Type": "application/json"}
+          BASE = "https://api.appstoreconnect.apple.com/v1"
+
+          # 1) App + Group
+          r = requests.get(f"{BASE}/apps", headers=H,
+                           params={"filter[bundleId]": "es.temazo.app.beta"})
+          app_id = r.json()["data"][0]["id"]
+
+          r = requests.get(f"{BASE}/apps/{app_id}/betaGroups", headers=H)
+          groups = r.json().get("data", [])
+          if not groups:
+              print("Sin grupos — abortando")
+              sys.exit(1)
+          group = groups[0]
+          gid = group["id"]
+          print(f"Grupo: '{group['attributes'].get('name')}' id={gid}")
+          print(f"  isInternalGroup={group['attributes'].get('isInternalGroup')}")
+          print(f"  hasAccessToAllBuilds={group['attributes'].get('hasAccessToAllBuilds')}")
+
+          # 2) Builds
+          print("\n=== Builds actuales ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/builds", headers=H,
+                           params={"limit": 20, "sort": "-uploadedDate"})
+          builds = r.json().get("data", [])
+          for b in builds:
+              ba = b["attributes"]
+              print(f"  Build {ba.get('version')} id={b['id']} state={ba.get('processingState')} exp={ba.get('usesNonExemptEncryption')}")
+
+          # 3) Assign each build to the group individually
+          print("\n=== Asignar builds al grupo ===")
+          for b in builds:
+              bid = b["id"]
+              ver = b["attributes"].get("version")
+              body = {"data": [{"type": "betaGroups", "id": gid}]}
+              r2 = requests.post(f"{BASE}/builds/{bid}/relationships/betaGroups",
+                                 headers=H, json=body)
+              print(f"  Build {ver}: POST → {r2.status_code}")
+              if r2.status_code >= 300:
+                  print(f"    body: {r2.text[:400]}")
+
+          # 4) Verificar asignaciones
+          print("\n=== Verificar asignación de cada build ===")
+          for b in builds:
+              bid = b["id"]
+              ver = b["attributes"].get("version")
+              r2 = requests.get(f"{BASE}/builds/{bid}/betaGroups", headers=H)
+              gs = r2.json().get("data", [])
+              names = [g["attributes"].get("name", "?") for g in gs]
+              print(f"  Build {ver} está en: {names or '(ninguno)'}")
+
+          # 5) Añadir tester CORRECTAMENTE (sin 'apps' relationship)
+          print("\n=== Añadir tester azkow@lecra.net al grupo ===")
+          body = {"data": {"type": "betaTesters",
+                           "attributes": {
+                               "email": "azkow@lecra.net",
+                               "firstName": "Ignacio",
+                               "lastName": "Beta"
+                           },
+                           "relationships": {
+                               "betaGroups": {"data": [{"type": "betaGroups", "id": gid}]}
+                           }}}
+          r2 = requests.post(f"{BASE}/betaTesters", headers=H, json=body)
+          print(f"POST tester: HTTP {r2.status_code}")
+          if r2.status_code == 409:
+              # Probablemente ya existe — buscarlo y añadirlo al grupo
+              print("  (tester ya existe, buscando…)")
+              r3 = requests.get(f"{BASE}/betaTesters", headers=H,
+                                params={"filter[email]": "azkow@lecra.net"})
+              testers = r3.json().get("data", [])
+              if testers:
+                  tid = testers[0]["id"]
+                  body2 = {"data": [{"type": "betaTesters", "id": tid}]}
+                  r4 = requests.post(f"{BASE}/betaGroups/{gid}/relationships/betaTesters",
+                                     headers=H, json=body2)
+                  print(f"  Añadir tester existente al grupo: HTTP {r4.status_code}")
+                  if r4.status_code >= 300: print(f"    {r4.text[:400]}")
+          elif r2.status_code >= 300:
+              print(f"  {r2.text[:500]}")
+
+          # 6) Verificar testers en el grupo
+          print("\n=== Testers en el grupo ===")
+          r2 = requests.get(f"{BASE}/betaGroups/{gid}/betaTesters", headers=H)
+          for t in r2.json().get("data", []):
+              ta = t["attributes"]
+              print(f"  {ta.get('email')} state={ta.get('state')} inviteType={ta.get('inviteType')}")
+
+          print("\n=== DONE ===")
+          PYEOF
