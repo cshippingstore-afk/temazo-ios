@@ -35,12 +35,20 @@ final class DownloadManager: NSObject, ObservableObject {
     private var session: URLSession!
     private var activeTasks: [String: URLSessionDownloadTask] = [:]  // ytId → task
     private var queuedTracks: [(Track, String)] = []                 // pendientes cuando cap alcanzado
-    private let maxConcurrent = 3
+    /// BETA v1.2.3 — reducido de 3 a 1 para no quemar la IP con extractor de YouTube.
+    /// YouTube banea la IP tras N requests concurrentes. Ir secuencial es lento pero fiable.
+    private let maxConcurrent = 1
     /// Meta pendiente por completar (necesitamos guardar el Track del que descargamos
     /// para poder llamar OfflineLibrary.registerDownload al terminar el URLSession delegate).
     private var pendingMeta: [Int: (track: Track, ytId: String)] = [:]  // taskIdentifier → meta
     /// BETA v1.2: cache Track por ytId — sobrevive a failures, permite retry.
     private var trackCache: [String: Track] = [:]
+    /// BETA v1.2.3: pausa entre llamadas al extractor para no ser baneados.
+    private var lastExtractorCallAt: Date = .distantPast
+    private let extractorMinGap: TimeInterval = 3.0  // 3s entre calls
+    /// BETA v1.2.3: pausa entre INICIOS de descarga (para no saturar googlevideo)
+    private var lastDownloadStartAt: Date = .distantPast
+    private let downloadMinGap: TimeInterval = 2.0  // 2s entre downloads
 
     private let netMonitor = NWPathMonitor()
     @Published private(set) var isOnWifi: Bool = false
@@ -88,30 +96,39 @@ final class DownloadManager: NSObject, ObservableObject {
         actuallyStart(track: track, ytId: ytId, url: resolvedURL)
     }
 
-    /// Convenience: si ya tienes la track resolveremos con extractor en 1 llamada.
+    /// BETA v1.2.3: descarga TODO via yt_proxy.php del VPS. El iPhone NUNCA habla
+    /// con YouTube. Por qué:
+    ///   - Extractor local usa la IP del iPhone → 58 requests seguidos → ban de YouTube
+    ///   - yt_proxy.php usa yt-dlp en el VPS (una única IP tuya, ya "conocida")
+    ///     y devuelve un 302 hacia googlevideo.com — googlevideo NO banea (solo www.youtube.com sí)
+    ///   - El .m4a viene DIRECTO de googlevideo (no consume ancho de banda del VPS)
+    ///
+    /// Resultado: imposible que YouTube banee al user; el único que hace requests
+    /// de extracción es tu VPS (una IP), rate-limitado y cacheado a nivel server.
     func downloadTrackAutoResolve(_ track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
-        // Cache Track para posible retry si falla el extractor
         trackCache[ytId] = track
         if OfflineLibrary.shared.isDownloaded(ytId) {
             states[ytId] = .completed
             return
         }
         states[ytId] = .queued
-        Task { @MainActor in
-            // Cache hit del extractor
-            if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
-                self.downloadTrack(track, resolvedURL: cached)
-                return
-            }
-            // Live extract con timeout
-            do {
-                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 8)
-                self.downloadTrack(track, resolvedURL: url)
-            } catch {
-                self.states[ytId] = .failed("extractor: \(error.localizedDescription)")
-            }
+        // URL directa al proxy — el propio yt_proxy.php responde con 302 al googlevideo real
+        guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
+            states[ytId] = .failed("no proxy url")
+            return
         }
+        downloadTrack(track, resolvedURL: proxyURL)
+    }
+
+    /// URL del yt_proxy.php — resolución + 302 al googlevideo server-side.
+    private func buildProxyURL(ytId: String) -> URL? {
+        var comps = URLComponents(string: "https://temazo.es/api/yt_proxy.php")
+        comps?.queryItems = [
+            URLQueryItem(name: "id", value: ytId),
+            URLQueryItem(name: "format", value: "audio")  // hint al proxy: solo m4a
+        ]
+        return comps?.url
     }
 
     /// BETA v1.1: descarga en cadena una lista completa (álbum / playlist entera).
@@ -164,6 +181,20 @@ final class DownloadManager: NSObject, ObservableObject {
             print("[DL] \(ytId) esperando WiFi (wifiOnly=true, currentWiFi=false)")
             return
         }
+        // BETA v1.2.3: pausa 2s entre INICIOS de descarga para no saturar VPS ni googlevideo
+        let elapsed = Date().timeIntervalSince(lastDownloadStartAt)
+        if elapsed < downloadMinGap {
+            let wait = downloadMinGap - elapsed
+            print("[DL] \(ytId) esperando \(String(format: "%.1f", wait))s por rate-limit")
+            queuedTracks.insert((track, ytId), at: 0)
+            states[ytId] = .queued
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                self?.maybeStartQueued()
+            }
+            return
+        }
+        lastDownloadStartAt = Date()
         let task = session.downloadTask(with: url)
         activeTasks[ytId] = task
         pendingMeta[task.taskIdentifier] = (track, ytId)
@@ -180,18 +211,13 @@ final class DownloadManager: NSObject, ObservableObject {
                 queuedTracks.insert((track, ytId), at: 0)
                 return
             }
-            // Resolver URL nueva por si expiró
-            Task { @MainActor in
-                if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
-                    self.actuallyStart(track: track, ytId: ytId, url: cached)
-                } else {
-                    do {
-                        let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 8)
-                        self.actuallyStart(track: track, ytId: ytId, url: url)
-                    } catch {
-                        self.states[ytId] = .failed("extractor: \(error.localizedDescription)")
-                    }
-                }
+            // BETA v1.2.3: usamos el proxy directamente — sin llamar extractor local.
+            // El proxy re-resuelve googlevideo URL cada vez (con cache 5min server-side),
+            // así que si la URL expiró, la próxima llamada tiene URL fresca.
+            if let proxyURL = self.buildProxyURL(ytId: ytId) {
+                self.actuallyStart(track: track, ytId: ytId, url: proxyURL)
+            } else {
+                self.states[ytId] = .failed("no proxy url")
             }
         }
     }
