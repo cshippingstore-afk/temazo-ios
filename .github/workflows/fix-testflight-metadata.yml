@@ -1,0 +1,157 @@
+name: Fix TestFlight metadata (Beta App Review + License + Export Compliance)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Populate TestFlight metadata
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, json, os, sys
+          key_id = os.environ['KEY_ID']
+          issuer_id = os.environ['ISSUER_ID']
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          payload = {"iss": issuer_id, "iat": int(time.time()),
+                     "exp": int(time.time()) + 600, "aud": "appstoreconnect-v1"}
+          token = jwt.encode(payload, key, algorithm="ES256",
+                             headers={"kid": key_id, "typ": "JWT"})
+          H = {"Authorization": f"Bearer {token}",
+               "Content-Type": "application/json"}
+          BASE = "https://api.appstoreconnect.apple.com/v1"
+
+          # 1) App ID
+          r = requests.get(f"{BASE}/apps", headers=H,
+                           params={"filter[bundleId]": "es.temazo.app.beta"})
+          app_id = r.json()["data"][0]["id"]
+          print(f"App ID: {app_id}")
+
+          # 2) Beta App Review Detail — PATCH contact info + notes
+          print("\n=== 1. Beta App Review Detail ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/betaAppReviewDetail", headers=H)
+          rev = r.json().get("data")
+          if rev:
+              rev_id = rev["id"]
+              body = {"data": {"type": "betaAppReviewDetails", "id": rev_id,
+                               "attributes": {
+                                   "contactFirstName": "Ignacio",
+                                   "contactLastName": "Temazo",
+                                   "contactPhone": "+34600000000",
+                                   "contactEmail": "azkow@lecra.net",
+                                   "demoAccountRequired": False,
+                                   "notes": "Beta interna Temazo. App de música legal via YouTube embed. Offline mode via cache local con refresh 90 dias."
+                               }}}
+              r2 = requests.patch(f"{BASE}/betaAppReviewDetails/{rev_id}",
+                                  headers=H, json=body)
+              print(f"PATCH status: {r2.status_code}")
+              if r2.status_code >= 300: print(r2.text[:600])
+
+          # 3) Beta App Localizations — description, feedback email, marketing URL
+          print("\n=== 2. Beta App Localizations ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/betaAppLocalizations", headers=H)
+          locs = r.json().get("data", [])
+          for loc in locs:
+              la = loc["attributes"]
+              print(f"  Locale {la.get('locale')} desc={la.get('description')!r}")
+          if not locs:
+              print("  Sin localizations — creando ES-ES")
+              body = {"data": {"type": "betaAppLocalizations",
+                               "attributes": {
+                                   "description": "Temazo Beta - musica en streaming con modo offline.",
+                                   "feedbackEmail": "azkow@lecra.net",
+                                   "marketingUrl": "https://temazo.es",
+                                   "privacyPolicyUrl": "https://temazo.es/privacidad.php",
+                                   "tvOsPrivacyPolicy": None,
+                                   "locale": "es-ES"
+                               },
+                               "relationships": {"app": {"data": {"type": "apps", "id": app_id}}}}}
+              r2 = requests.post(f"{BASE}/betaAppLocalizations", headers=H, json=body)
+              print(f"POST status: {r2.status_code}")
+              if r2.status_code >= 300: print(r2.text[:600])
+          else:
+              for loc in locs:
+                  lid = loc["id"]
+                  body = {"data": {"type": "betaAppLocalizations", "id": lid,
+                                   "attributes": {
+                                       "description": "Temazo Beta - musica en streaming con modo offline.",
+                                       "feedbackEmail": "azkow@lecra.net",
+                                       "marketingUrl": "https://temazo.es",
+                                       "privacyPolicyUrl": "https://temazo.es/privacidad.php"
+                                   }}}
+                  r2 = requests.patch(f"{BASE}/betaAppLocalizations/{lid}",
+                                      headers=H, json=body)
+                  print(f"PATCH {lid} status: {r2.status_code}")
+                  if r2.status_code >= 300: print(r2.text[:600])
+
+          # 4) Beta License Agreement
+          print("\n=== 3. Beta License Agreement ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/betaLicenseAgreement", headers=H)
+          la = r.json().get("data")
+          if la:
+              lid = la["id"]
+              body = {"data": {"type": "betaLicenseAgreements", "id": lid,
+                               "attributes": {
+                                   "agreementText": "Beta interna de Temazo. Solo para testers autorizados. Al instalar aceptas participar en pruebas y enviar feedback a azkow@lecra.net."
+                               }}}
+              r2 = requests.patch(f"{BASE}/betaLicenseAgreements/{lid}",
+                                  headers=H, json=body)
+              print(f"PATCH status: {r2.status_code}")
+              if r2.status_code >= 300: print(r2.text[:600])
+
+          # 5) Builds — Export Compliance (marca cada build como no-uses non-exempt encryption)
+          print("\n=== 4. Export Compliance por build ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/builds", headers=H,
+                           params={"limit": 20, "sort": "-uploadedDate"})
+          for b in r.json().get("data", []):
+              bid = b["id"]
+              ba = b["attributes"]
+              if ba.get("usesNonExemptEncryption") is None:
+                  body = {"data": {"type": "builds", "id": bid,
+                                   "attributes": {"usesNonExemptEncryption": False}}}
+                  r2 = requests.patch(f"{BASE}/builds/{bid}", headers=H, json=body)
+                  print(f"  Build {ba.get('version')} PATCH usesNonExemptEncryption=False → {r2.status_code}")
+                  if r2.status_code >= 300: print(f"    {r2.text[:400]}")
+              else:
+                  print(f"  Build {ba.get('version')} ya tiene usesNonExemptEncryption={ba.get('usesNonExemptEncryption')}")
+
+          # 6) Beta Groups — crear grupo interno si no existe y añadir los builds
+          print("\n=== 5. Beta Groups (internal) ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/betaGroups", headers=H)
+          groups = r.json().get("data", [])
+          internal = None
+          for g in groups:
+              ga = g["attributes"]
+              print(f"  Group {ga.get('name')} isInternal={ga.get('isInternalGroup')}")
+              if ga.get("isInternalGroup"):
+                  internal = g
+          if not internal:
+              print("  Sin internal group — App Store Connect gestiona el default 'App Store Connect Users' automatico")
+          else:
+              # Asociar builds al grupo interno
+              gid = internal["id"]
+              r = requests.get(f"{BASE}/apps/{app_id}/builds", headers=H, params={"limit": 5})
+              for b in r.json().get("data", []):
+                  bid = b["id"]
+                  body = {"data": [{"type": "betaGroups", "id": gid}]}
+                  r2 = requests.post(f"{BASE}/builds/{bid}/relationships/betaGroups",
+                                     headers=H, json=body)
+                  print(f"  Add build {b['attributes'].get('version')} to group '{internal['attributes']['name']}' → {r2.status_code}")
+
+          print("\n=== DONE ===")
+          PYEOF
