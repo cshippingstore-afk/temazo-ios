@@ -180,8 +180,9 @@ final class DownloadManager: NSObject, ObservableObject {
         return enqueued
     }
 
-    /// BETA v1.2: reintenta todos los tracks en estado failed usando trackCache.
-    /// Idempotente — safe llamar múltiples veces.
+    /// BETA v1.2.6: reintenta todos los tracks en estado failed.
+    /// Los borra del states dict Y los re-encola. Idempotente.
+    /// Usado al arrancar la app (limpiar fallos previos) y desde el Orchestrator.
     func retryFailed() {
         let failedIds = states.compactMap { (yt, st) -> String? in
             if case .failed = st { return yt } else { return nil }
@@ -191,9 +192,23 @@ final class DownloadManager: NSObject, ObservableObject {
         for yt in failedIds {
             states.removeValue(forKey: yt)
             if let track = trackCache[yt] {
+                // Sacar de queue si estuviese duplicado, y re-encolar
+                queuedTracks.removeAll { $0.1 == yt }
                 downloadTrackAutoResolve(track)
             }
         }
+    }
+
+    /// BETA v1.2.6: limpiar TODOS los failed states al arrancar la app.
+    /// Evita que el user vea "6 fallos" acumulados de sesiones anteriores.
+    /// Los tracks se re-encolarán en el próximo syncAllNow.
+    func clearFailedStates() {
+        let before = states.count
+        states = states.filter { _, st in
+            if case .failed = st { return false } else { return true }
+        }
+        let cleared = before - states.count
+        if cleared > 0 { print("[DL] cleared \(cleared) failed states at boot") }
     }
 
     /// Cancela y elimina.

@@ -197,15 +197,9 @@ final class Player: NSObject, ObservableObject {
             return
         }
 
-        // BETA v1.2: modo offline puro. Si el user activó "Modo offline" en Ajustes
-        // y este track NO está descargado, no llamamos al extractor — mostramos error
-        // amable y saltamos a siguiente track en cola si hay.
-        if SettingsRepo.shared.offlineMode {
-            state.lastError = "Modo offline — canción no descargada"
-            state.loadingState = .failed
-            print("[Player] offline mode ON + no local file for \(ytId) → skipping")
-            return
-        }
+        // BETA v1.2.6: gate offlineMode REMOVIDO. Se activaba por accidente y
+        // bloqueaba streaming. Ahora siempre intentamos reproducir: local first,
+        // extractor después. El toggle en Ajustes también se eliminó.
 
         // Estrategia v2.26 (vuelta a AVPlayer tras experimento WKWebView fallido):
         // PRIORIDAD ABSOLUTA al extractor local — extrae la URL desde el iPhone del

@@ -32,6 +32,10 @@ final class OfflineOrchestrator: ObservableObject {
     func start() {
         print("[OfflineOrch] start")
 
+        // BETA v1.2.6: limpiar failed states de sesiones previas antes de sync
+        // (user no ve "6 fallos" viejos, se re-encolan como queued).
+        DownloadManager.shared.clearFailedStates()
+
         // 1. BOOT: dispara sync inmediato en cuanto haya sesión + red viable.
         //    Sin esperar cambios de red — puede que ya estés en WiFi al arrancar.
         Task { @MainActor in

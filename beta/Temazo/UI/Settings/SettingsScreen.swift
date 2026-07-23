@@ -231,14 +231,9 @@ struct SettingsScreen: View {
                 }
             }.tint(.neonPink)
 
-            Toggle(isOn: $settings.offlineMode) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Modo offline")
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                    Text("Solo reproduce canciones ya descargadas")
-                        .font(.system(size: 12)).foregroundStyle(.textLow)
-                }
-            }.tint(.orange)
+            // BETA v1.2.6: toggle "Modo offline" removido — se activaba por accidente
+            // y bloqueaba streaming. El offline REAL ya funciona automático:
+            // si hay archivo local se usa, si no se stream. No hace falta bloquear.
 
             Button {
                 Task { await OfflineOrchestrator.shared.syncAllNow() }

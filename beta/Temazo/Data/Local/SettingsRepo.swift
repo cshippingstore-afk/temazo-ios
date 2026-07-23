@@ -62,7 +62,12 @@ final class SettingsRepo: ObservableObject {
         autoDownloadFavorites = UserDefaults.standard.object(forKey: kAutoDownloadFavs) as? Bool ?? true
         autoDownloadMyPlaylists = UserDefaults.standard.object(forKey: kAutoDownloadMyPls) as? Bool ?? true
         autoDownloadFollowedPlaylists = UserDefaults.standard.object(forKey: kAutoDownloadFollowedPls) as? Bool ?? true
-        offlineMode = UserDefaults.standard.bool(forKey: kOfflineMode)
+        // BETA v1.2.6: offlineMode SIEMPRE false al arrancar. Toggle era peligroso
+        // — user lo activaba sin querer y las canciones dejaban de reproducirse.
+        // El offline "real" ya funciona automáticamente: si hay archivo local, se usa;
+        // si no, se stream. Nunca hace falta bloquear el streaming.
+        offlineMode = false
+        UserDefaults.standard.set(false, forKey: kOfflineMode)
     }
 
     private func applyToPlayer() {
