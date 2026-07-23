@@ -1,0 +1,134 @@
+name: Fix TestFlight - crear grupo interno + asignar builds
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Create internal beta group + assign builds
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, json, os
+          key_id = os.environ['KEY_ID']
+          issuer_id = os.environ['ISSUER_ID']
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          payload = {"iss": issuer_id, "iat": int(time.time()),
+                     "exp": int(time.time()) + 600, "aud": "appstoreconnect-v1"}
+          token = jwt.encode(payload, key, algorithm="ES256",
+                             headers={"kid": key_id, "typ": "JWT"})
+          H = {"Authorization": f"Bearer {token}",
+               "Content-Type": "application/json"}
+          BASE = "https://api.appstoreconnect.apple.com/v1"
+
+          # 1) App
+          r = requests.get(f"{BASE}/apps", headers=H,
+                           params={"filter[bundleId]": "es.temazo.app.beta"})
+          app_id = r.json()["data"][0]["id"]
+          print(f"App ID: {app_id}")
+
+          # 2) Groups actuales
+          print("\n=== Beta Groups actuales ===")
+          r = requests.get(f"{BASE}/apps/{app_id}/betaGroups", headers=H)
+          groups = r.json().get("data", [])
+          existing = None
+          for g in groups:
+              ga = g["attributes"]
+              print(f"  '{ga.get('name')}' id={g['id']} internal={ga.get('isInternalGroup')} publicLink={ga.get('publicLink')}")
+              if ga.get("isInternalGroup") or ga.get("name") == "Temazo Beta Team":
+                  existing = g
+          if not groups:
+              print("  (ninguno)")
+
+          # 3) Crear grupo interno si no hay
+          if not existing:
+              print("\n=== Creando grupo 'Temazo Beta Team' ===")
+              body = {"data": {"type": "betaGroups",
+                               "attributes": {
+                                   "name": "Temazo Beta Team",
+                                   "publicLinkEnabled": False,
+                                   "isInternalGroup": True
+                               },
+                               "relationships": {
+                                   "app": {"data": {"type": "apps", "id": app_id}}
+                               }}}
+              r2 = requests.post(f"{BASE}/betaGroups", headers=H, json=body)
+              print(f"POST status: {r2.status_code}")
+              if r2.status_code >= 300:
+                  print(r2.text[:800])
+                  # Reintentar sin isInternalGroup (algunas cuentas lo rechazan)
+                  body["data"]["attributes"].pop("isInternalGroup", None)
+                  r2 = requests.post(f"{BASE}/betaGroups", headers=H, json=body)
+                  print(f"Reintento POST status: {r2.status_code}")
+                  if r2.status_code >= 300: print(r2.text[:800])
+              if r2.status_code < 300:
+                  existing = r2.json()["data"]
+
+          # 4) Añadir el user actual (email de la API key) al grupo como tester
+          if existing:
+              gid = existing["id"]
+              print(f"\n=== Grupo activo: id={gid} ===")
+
+              # 5) Añadir todos los builds al grupo
+              print("\n=== Asignando builds al grupo ===")
+              r = requests.get(f"{BASE}/apps/{app_id}/builds", headers=H,
+                               params={"limit": 20, "sort": "-uploadedDate"})
+              for b in r.json().get("data", []):
+                  bid = b["id"]
+                  ver = b["attributes"].get("version")
+                  body = {"data": [{"type": "betaGroups", "id": gid}]}
+                  r2 = requests.post(f"{BASE}/builds/{bid}/relationships/betaGroups",
+                                     headers=H, json=body)
+                  status = r2.status_code
+                  print(f"  Build {ver} → grupo: HTTP {status}")
+                  if status >= 300: print(f"    {r2.text[:300]}")
+
+              # 6) Verificar Export Compliance de cada build (importante)
+              print("\n=== Export Compliance ===")
+              r = requests.get(f"{BASE}/apps/{app_id}/builds", headers=H,
+                               params={"limit": 20})
+              for b in r.json().get("data", []):
+                  bid = b["id"]
+                  ba = b["attributes"]
+                  cur = ba.get("usesNonExemptEncryption")
+                  print(f"  Build {ba.get('version')}: usesNonExemptEncryption={cur}")
+                  if cur is None:
+                      body = {"data": {"type": "builds", "id": bid,
+                                       "attributes": {"usesNonExemptEncryption": False}}}
+                      r3 = requests.patch(f"{BASE}/builds/{bid}", headers=H, json=body)
+                      print(f"    PATCH usesNonExemptEncryption=False → {r3.status_code}")
+                      if r3.status_code >= 300: print(f"    {r3.text[:400]}")
+
+              # 7) Añadir tester (email del user)
+              print("\n=== Añadiendo tester azkow@lecra.net ===")
+              body = {"data": {"type": "betaTesters",
+                               "attributes": {
+                                   "email": "azkow@lecra.net",
+                                   "firstName": "Ignacio",
+                                   "lastName": "Beta"
+                               },
+                               "relationships": {
+                                   "betaGroups": {"data": [{"type": "betaGroups", "id": gid}]},
+                                   "apps": {"data": [{"type": "apps", "id": app_id}]}
+                               }}}
+              r2 = requests.post(f"{BASE}/betaTesters", headers=H, json=body)
+              print(f"POST tester: HTTP {r2.status_code}")
+              if r2.status_code >= 300: print(f"  {r2.text[:500]}")
+
+          print("\n=== DONE ===")
+          PYEOF
