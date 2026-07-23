@@ -46,9 +46,9 @@ final class DownloadManager: NSObject, ObservableObject {
     /// BETA v1.2.3: pausa entre llamadas al extractor para no ser baneados.
     private var lastExtractorCallAt: Date = .distantPast
     private let extractorMinGap: TimeInterval = 3.0  // 3s entre calls
-    /// BETA v1.2.3: pausa entre INICIOS de descarga (para no saturar googlevideo)
+    /// BETA v1.2.4: pausa 1s entre INICIOS (con prefetch cache-warm, es suficiente)
     private var lastDownloadStartAt: Date = .distantPast
-    private let downloadMinGap: TimeInterval = 2.0  // 2s entre downloads
+    private let downloadMinGap: TimeInterval = 1.0
 
     private let netMonitor = NWPathMonitor()
     @Published private(set) var isOnWifi: Bool = false
@@ -173,26 +173,27 @@ final class DownloadManager: NSObject, ObservableObject {
 
     // MARK: - Privado
 
-    private func actuallyStart(track: Track, ytId: String, url: URL) {
+    /// Devuelve true si arrancó el task, false si fue rate-limited/wifi-blocked.
+    /// El caller usa el bool para saber si sigue drenando la cola o para.
+    @discardableResult
+    private func actuallyStart(track: Track, ytId: String, url: URL) -> Bool {
         // Chequeo WiFi
         if wifiOnly && !isOnWifi {
-            queuedTracks.append((track, ytId))
+            queuedTracks.insert((track, ytId), at: 0)  // volver a cola HEAD
             states[ytId] = .queued
-            print("[DL] \(ytId) esperando WiFi (wifiOnly=true, currentWiFi=false)")
-            return
+            print("[DL] \(ytId) esperando WiFi")
+            return false
         }
-        // BETA v1.2.3: pausa 2s entre INICIOS de descarga para no saturar VPS ni googlevideo
+        // BETA v1.2.4: rate-limit inter-inicio. Si aún no toca, re-inserta y
+        // programa un solo wake-up. NO seguimos drenando (evita bucle infinito).
         let elapsed = Date().timeIntervalSince(lastDownloadStartAt)
         if elapsed < downloadMinGap {
             let wait = downloadMinGap - elapsed
-            print("[DL] \(ytId) esperando \(String(format: "%.1f", wait))s por rate-limit")
+            print("[DL] \(ytId) esperando \(String(format: "%.1f", wait))s")
             queuedTracks.insert((track, ytId), at: 0)
             states[ytId] = .queued
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-                self?.maybeStartQueued()
-            }
-            return
+            scheduleWakeup(after: wait)
+            return false
         }
         lastDownloadStartAt = Date()
         let task = session.downloadTask(with: url)
@@ -201,25 +202,56 @@ final class DownloadManager: NSObject, ObservableObject {
         states[ytId] = .downloading(progress: 0)
         task.resume()
         print("[DL] START \(ytId) \(track.title)")
+        // BETA v1.2.4: prefetch — pre-calienta el cache del proxy para las próximas 2
+        // canciones. HEAD request es liviano y el proxy cachea 5min. Cuando toque
+        // realmente descargarlas, el 302 es casi instantáneo (sin re-resolver yt-dlp).
+        prefetchNextProxyURLs(count: 2)
+        return true
     }
 
-    private func maybeStartQueued() {
-        while activeTasks.count < maxConcurrent, let (track, ytId) = queuedTracks.first {
-            queuedTracks.removeFirst()
-            if wifiOnly && !isOnWifi {
-                // Aún no hay WiFi, dejamos en cola
-                queuedTracks.insert((track, ytId), at: 0)
-                return
-            }
-            // BETA v1.2.3: usamos el proxy directamente — sin llamar extractor local.
-            // El proxy re-resuelve googlevideo URL cada vez (con cache 5min server-side),
-            // así que si la URL expiró, la próxima llamada tiene URL fresca.
-            if let proxyURL = self.buildProxyURL(ytId: ytId) {
-                self.actuallyStart(track: track, ytId: ytId, url: proxyURL)
-            } else {
-                self.states[ytId] = .failed("no proxy url")
+    /// Watchdog único para no acumular Tasks-sleep. Reemplaza al anterior si existe.
+    private var pendingWakeup: Task<Void, Never>? = nil
+    private func scheduleWakeup(after seconds: TimeInterval) {
+        pendingWakeup?.cancel()
+        pendingWakeup = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            self?.pendingWakeup = nil
+            self?.maybeStartQueued()
+        }
+    }
+
+    /// BETA v1.2.4: prefetch cache del proxy para las próximas N canciones en cola.
+    /// Un HEAD request es minimal (headers only) pero hace que yt_proxy.php resuelva
+    /// yt-dlp y guarde el 302 en su cache 5min. Cuando toque descargar en serio,
+    /// el proxy devuelve 302 instant (sin gastar tiempo re-resolviendo).
+    private func prefetchNextProxyURLs(count: Int) {
+        let upcoming = queuedTracks.prefix(count).compactMap { $0.0.youtubeId }
+        for ytId in upcoming {
+            guard let url = buildProxyURL(ytId: ytId) else { continue }
+            Task.detached(priority: .background) {
+                var req = URLRequest(url: url)
+                req.httpMethod = "HEAD"
+                req.timeoutInterval = 5
+                _ = try? await URLSession.shared.data(for: req)
             }
         }
+    }
+
+    /// BETA v1.2.4: sólo intenta arrancar UN task por invocación. Si arrancó,
+    /// el propio ciclo (delegate on finish) llama de nuevo. Si NO arrancó
+    /// (rate-limit / wifi), no seguimos drenando — evita loop infinito.
+    private func maybeStartQueued() {
+        guard activeTasks.count < maxConcurrent else { return }
+        guard let (track, ytId) = queuedTracks.first else { return }
+        queuedTracks.removeFirst()
+        guard let proxyURL = buildProxyURL(ytId: ytId) else {
+            states[ytId] = .failed("no proxy url")
+            // Continúa con la siguiente
+            maybeStartQueued()
+            return
+        }
+        // actuallyStart devuelve true si arrancó, false si re-encoló
+        _ = actuallyStart(track: track, ytId: ytId, url: proxyURL)
     }
 }
 
@@ -243,14 +275,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                                 didFinishDownloadingTo location: URL) {
-        // El file en `location` es temporal — hay que moverlo YA a nuestro directorio.
         let taskId = downloadTask.taskIdentifier
-        // Copiamos el file de forma síncrona (estamos en la callback de URLSession)
         var savedSize: Int64 = 0
         var savedTo: URL? = nil
         var errorMsg: String? = nil
-        // Extraemos meta síncronamente vía DispatchQueue.main (no ideal pero necesario)
-        // Usamos DispatchQueue sincrono para no soltar location
         var metaLocal: (track: Track, ytId: String)?
         DispatchQueue.main.sync {
             metaLocal = self.pendingMeta[taskId]
@@ -259,16 +287,35 @@ extension DownloadManager: URLSessionDownloadDelegate {
             print("[DL] didFinish sin meta para task \(taskId)")
             return
         }
-        let dest = OfflineLibrary.shared.destinationURL(for: meta.ytId)
-        do {
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
+        // BETA v1.2.4: validar HTTP status. Si el proxy devuelve 429/503/etc,
+        // el body es HTML de error — NO lo guardamos como .m4a (basura).
+        if let httpResp = downloadTask.response as? HTTPURLResponse {
+            let sc = httpResp.statusCode
+            if !(200...299).contains(sc) {
+                errorMsg = "http \(sc)"
             }
-            try FileManager.default.moveItem(at: location, to: dest)
-            savedSize = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
-            savedTo = dest
-        } catch {
-            errorMsg = "move: \(error.localizedDescription)"
+        }
+        // BETA v1.2.4: validar tamaño mínimo. Un .m4a legítimo pesa >100KB.
+        // Un HTML de error pesa <10KB. Si es sospechosamente pequeño, descartar.
+        let tmpSize = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? Int64) ?? 0
+        if errorMsg == nil && tmpSize < 50_000 {
+            errorMsg = "size \(tmpSize) too small (proxy error?)"
+        }
+        let dest = OfflineLibrary.shared.destinationURL(for: meta.ytId)
+        if errorMsg == nil {
+            do {
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.moveItem(at: location, to: dest)
+                savedSize = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+                savedTo = dest
+            } catch {
+                errorMsg = "move: \(error.localizedDescription)"
+            }
+        } else {
+            // Limpiar el file basura del temp path
+            try? FileManager.default.removeItem(at: location)
         }
         Task { @MainActor [weak self] in
             guard let self = self else { return }
