@@ -57,10 +57,11 @@ final class SettingsRepo: ObservableObject {
         crossfadeEnabled = UserDefaults.standard.bool(forKey: kCrossfadeOn)
         let s = UserDefaults.standard.integer(forKey: kCrossfadeSec)
         crossfadeSeconds = s == 0 ? 2 : s
-        // Killer feature ON por defecto; los bulk pulls OFF por default (storage).
+        // BETA v1.2.2 — TODO automático por defecto. User puede desactivar en
+        // Ajustes si quiere ahorrar storage. WiFi guard sigue evitando gastar datos.
         autoDownloadFavorites = UserDefaults.standard.object(forKey: kAutoDownloadFavs) as? Bool ?? true
-        autoDownloadMyPlaylists = UserDefaults.standard.bool(forKey: kAutoDownloadMyPls)
-        autoDownloadFollowedPlaylists = UserDefaults.standard.bool(forKey: kAutoDownloadFollowedPls)
+        autoDownloadMyPlaylists = UserDefaults.standard.object(forKey: kAutoDownloadMyPls) as? Bool ?? true
+        autoDownloadFollowedPlaylists = UserDefaults.standard.object(forKey: kAutoDownloadFollowedPls) as? Bool ?? true
         offlineMode = UserDefaults.standard.bool(forKey: kOfflineMode)
     }
 

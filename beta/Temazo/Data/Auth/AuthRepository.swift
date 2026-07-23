@@ -80,6 +80,7 @@ final class AuthRepository: ObservableObject {
                 currentUser = u
                 persistCurrentUser()
                 TemazoAPI.shared.persistCookies()
+                OfflineOrchestrator.shared.onLogin()  // BETA v1.2.2 — sync inmediato
                 return .success(())
             }
             return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Google login error"))
@@ -108,6 +109,7 @@ final class AuthRepository: ObservableObject {
                 currentUser = u
                 persistCurrentUser()
                 TemazoAPI.shared.persistCookies()  // mantener login entre lanzamientos
+                OfflineOrchestrator.shared.onLogin()  // BETA v1.2.2 — sync inmediato tras login
                 return .success(())
             }
             return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Login error"))
@@ -128,6 +130,7 @@ final class AuthRepository: ObservableObject {
                 currentUser = u
                 persistCurrentUser()
                 TemazoAPI.shared.persistCookies()
+                OfflineOrchestrator.shared.onLogin()  // BETA v1.2.2
                 return .success(())
             }
             return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Register error"))

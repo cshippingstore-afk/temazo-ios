@@ -31,7 +31,23 @@ final class OfflineOrchestrator: ObservableObject {
     /// Cablear al arrancar la app (TemazoApp.task).
     func start() {
         print("[OfflineOrch] start")
-        // Observar cambios de red — cuando vuelva WiFi, resync
+
+        // 1. BOOT: dispara sync inmediato en cuanto haya sesión + red viable.
+        //    Sin esperar cambios de red — puede que ya estés en WiFi al arrancar.
+        Task { @MainActor in
+            // Espera hasta 5s a que arranquen auth + net monitor
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 500_000_000)  // 500ms
+                if AuthRepository.shared.currentUser != nil,
+                   DownloadManager.shared.isOnWifi || !DownloadManager.shared.wifiOnly {
+                    print("[OfflineOrch] BOOT sync — user + red OK")
+                    await self.syncAllNow(force: true)
+                    break
+                }
+            }
+        }
+
+        // 2. Observar cambios de red — cuando vuelva WiFi, resync
         Task { @MainActor in
             for await _ in DownloadManager.shared.$isOnWifi.values {
                 if DownloadManager.shared.isOnWifi {
@@ -43,7 +59,8 @@ final class OfflineOrchestrator: ObservableObject {
                 }
             }
         }
-        // Watchdog: cada 60s, si hay tasks en states=failed, reintenta.
+
+        // 3. Watchdog: cada 60s, si hay tasks en states=failed o toca sync, dispara.
         watchdogTask?.cancel()
         watchdogTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -60,45 +77,70 @@ final class OfflineOrchestrator: ObservableObject {
         }
     }
 
+    /// Se llama cuando el user hace login o cambia de sesión. Fuerza sync sin cooldown.
+    func onLogin() {
+        Task { @MainActor in
+            print("[OfflineOrch] onLogin — sync inmediato (force)")
+            await syncAllNow(force: true)
+        }
+    }
+
     /// Dispara syncAllNow() si hace más de 5 min desde la última.
     private func maybeSyncAll() async {
         guard Date().timeIntervalSince(lastFullSync) > syncCooldown else { return }
-        await syncAllNow()
+        await syncAllNow(force: false)
     }
 
     /// Fuerza una sincronización completa: recorre favs + mis playlists + playlists
     /// que sigo y encola descargas según los toggles. Idempotente — no re-descarga
-    /// lo que ya está en OfflineLibrary.
-    func syncAllNow() async {
+    /// lo que ya está en OfflineLibrary. Con `force=true` ignora el cooldown.
+    func syncAllNow(force: Bool = false) async {
+        if !force, Date().timeIntervalSince(lastFullSync) < syncCooldown {
+            print("[OfflineOrch] skip syncAllNow (cooldown)")
+            return
+        }
         lastFullSync = Date()
         let settings = SettingsRepo.shared
         print("[OfflineOrch] syncAllNow — favs=\(settings.autoDownloadFavorites) myPls=\(settings.autoDownloadMyPlaylists) followed=\(settings.autoDownloadFollowedPlaylists)")
 
+        var totalEnqueued = 0
         // 1. Favoritos
         if settings.autoDownloadFavorites {
-            await syncFavorites()
+            totalEnqueued += await syncFavorites()
         }
         // 2. Mis playlists (owner)
         if settings.autoDownloadMyPlaylists {
-            await syncMyPlaylists()
+            totalEnqueued += await syncMyPlaylists()
         }
         // 3. Playlists que sigo
         if settings.autoDownloadFollowedPlaylists {
-            await syncFollowedPlaylists()
+            totalEnqueued += await syncFollowedPlaylists()
+        }
+
+        // Toast al arrancar sync bulk — user sabe qué está pasando
+        if totalEnqueued > 0 {
+            NotificationCenter.default.post(
+                name: .temazoShowToast, object: nil,
+                userInfo: ["text": "🔄 Sincronizando \(totalEnqueued) canciones offline"])
         }
     }
 
-    private func syncFavorites() async {
+    @discardableResult
+    private func syncFavorites() async -> Int {
         do {
             let resp = try await TemazoAPI.shared.favs()
             let n = DownloadManager.shared.downloadAll(resp.tracks)
             print("[OfflineOrch] favs → encoladas \(n) de \(resp.tracks.count)")
+            return n
         } catch {
             print("[OfflineOrch] favs error: \(error)")
+            return 0
         }
     }
 
-    private func syncMyPlaylists() async {
+    @discardableResult
+    private func syncMyPlaylists() async -> Int {
+        var total = 0
         do {
             let pls = try await TemazoAPI.shared.playlists()
             for p in pls.playlists {
@@ -106,6 +148,7 @@ final class OfflineOrchestrator: ObservableObject {
                     let tracks = try await TemazoAPI.shared.playlistTracks(p.id)
                     let n = DownloadManager.shared.downloadAll(tracks.tracks)
                     print("[OfflineOrch] playlist '\(p.name)' → encoladas \(n)")
+                    total += n
                 } catch {
                     print("[OfflineOrch] tracks playlist \(p.id) error: \(error)")
                 }
@@ -113,9 +156,12 @@ final class OfflineOrchestrator: ObservableObject {
         } catch {
             print("[OfflineOrch] mis playlists error: \(error)")
         }
+        return total
     }
 
-    private func syncFollowedPlaylists() async {
+    @discardableResult
+    private func syncFollowedPlaylists() async -> Int {
+        var total = 0
         do {
             let resp = try await TemazoAPI.shared.playlistsFollowing()
             for p in resp.playlists {
@@ -123,6 +169,7 @@ final class OfflineOrchestrator: ObservableObject {
                     let pub = try await TemazoAPI.shared.playlistPublic(idOrSlug: String(p.id))
                     let n = DownloadManager.shared.downloadAll(pub.tracks ?? [])
                     print("[OfflineOrch] followed pl '\(p.name)' → encoladas \(n)")
+                    total += n
                 } catch {
                     print("[OfflineOrch] tracks followed pl \(p.id) error: \(error)")
                 }
@@ -130,6 +177,7 @@ final class OfflineOrchestrator: ObservableObject {
         } catch {
             print("[OfflineOrch] followed playlists error: \(error)")
         }
+        return total
     }
 
     deinit {
