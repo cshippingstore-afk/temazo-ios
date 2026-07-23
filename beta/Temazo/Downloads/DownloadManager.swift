@@ -43,9 +43,10 @@ final class DownloadManager: NSObject, ObservableObject {
     private var pendingMeta: [Int: (track: Track, ytId: String)] = [:]  // taskIdentifier → meta
     /// BETA v1.2: cache Track por ytId — sobrevive a failures, permite retry.
     private var trackCache: [String: Track] = [:]
-    /// BETA v1.2.3: pausa entre llamadas al extractor para no ser baneados.
+    /// BETA v1.2.5: pausa 3s entre extractores. Memoria: ≤6w+3s = safe vs YT ban.
+    /// Con 1 worker + 3s = 20 req/min máximo, muy por debajo del techo de ban.
     private var lastExtractorCallAt: Date = .distantPast
-    private let extractorMinGap: TimeInterval = 3.0  // 3s entre calls
+    private let extractorMinGap: TimeInterval = 3.0
     /// BETA v1.2.4: pausa 1s entre INICIOS (con prefetch cache-warm, es suficiente)
     private var lastDownloadStartAt: Date = .distantPast
     private let downloadMinGap: TimeInterval = 1.0
@@ -55,10 +56,16 @@ final class DownloadManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        let config = URLSessionConfiguration.background(withIdentifier: "es.temazo.app.beta.downloads")
+        // BETA v1.2.5: identifier v2 para forzar SESION FRESCA — descartar tasks
+        // colgadas de v1.2.3/4 (session persiste entre app launches).
+        let config = URLSessionConfiguration.background(withIdentifier: "es.temazo.app.beta.downloads.v2")
         config.isDiscretionary = false                 // urgente, no diferir
         config.sessionSendsLaunchEvents = true         // relanzar app al terminar en bg
         config.allowsCellularAccess = true             // el filtro WiFi lo hacemos nosotros con el monitor
+        // BETA v1.2.5: TIMEOUTS AGRESIVOS. Defaults background son 60s req + 7 DIAS resource.
+        // Con 7 dias, un proxy que cuelga bloquea la cola una semana. Forzamos fallo rápido.
+        config.timeoutIntervalForRequest = 30          // 30s por request
+        config.timeoutIntervalForResource = 90         // 90s max por descarga entera
         self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
 
         // Network monitor: sabe si estamos en WiFi o cellular
@@ -96,15 +103,22 @@ final class DownloadManager: NSObject, ObservableObject {
         actuallyStart(track: track, ytId: ytId, url: resolvedURL)
     }
 
-    /// BETA v1.2.3: descarga TODO via yt_proxy.php del VPS. El iPhone NUNCA habla
-    /// con YouTube. Por qué:
-    ///   - Extractor local usa la IP del iPhone → 58 requests seguidos → ban de YouTube
-    ///   - yt_proxy.php usa yt-dlp en el VPS (una única IP tuya, ya "conocida")
-    ///     y devuelve un 302 hacia googlevideo.com — googlevideo NO banea (solo www.youtube.com sí)
-    ///   - El .m4a viene DIRECTO de googlevideo (no consume ancho de banda del VPS)
+    /// BETA v1.2.5: vuelta al extractor LOCAL en iPhone.
     ///
-    /// Resultado: imposible que YouTube banee al user; el único que hace requests
-    /// de extracción es tu VPS (una IP), rate-limitado y cacheado a nivel server.
+    /// Por qué NO seguimos con yt_proxy.php:
+    ///   - VPS intermitentemente devuelve 502 (comprobado directo)
+    ///   - Googlevideo signed URL enlaza a IP del VPS → iPhone descarga throttled 30 KB/s
+    ///
+    /// Por qué extractor local funciona:
+    ///   - iPhone resuelve con SU IP → googlevideo devuelve URL firmada para iPhone
+    ///   - iPhone descarga a MB/s desde googlevideo (WiFi normal)
+    ///
+    /// Protección contra ban de YouTube:
+    ///   - maxConcurrent = 1 (secuencial)
+    ///   - lastExtractorCallAt + extractorMinGap = 5s entre llamadas
+    ///   - Total: 12 requests/min máximo (memoria dice ≤6w+3s = safe, esto es más conservador)
+    ///
+    /// Fallback si extractor falla (raro): proxy VPS (throttled pero funciona)
     func downloadTrackAutoResolve(_ track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
         trackCache[ytId] = track
@@ -113,21 +127,40 @@ final class DownloadManager: NSObject, ObservableObject {
             return
         }
         states[ytId] = .queued
-        // URL directa al proxy — el propio yt_proxy.php responde con 302 al googlevideo real
-        guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
-            states[ytId] = .failed("no proxy url")
-            return
+        Task { @MainActor in
+            // 1. Cache hit — instantáneo, no cuenta como request
+            if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
+                self.downloadTrack(track, resolvedURL: cached)
+                return
+            }
+            // 2. Pausa 5s entre extractores para safe rate limit
+            let elapsed = Date().timeIntervalSince(self.lastExtractorCallAt)
+            if elapsed < self.extractorMinGap {
+                let wait = self.extractorMinGap - elapsed
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+            self.lastExtractorCallAt = Date()
+            // 3. Extractor local con timeout
+            do {
+                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
+                self.downloadTrack(track, resolvedURL: url)
+            } catch {
+                // 4. FALLBACK proxy — lento pero funciona si el extractor tiene un mal día
+                print("[DL] \(ytId) extractor fail → proxy fallback: \(error.localizedDescription)")
+                if let proxyURL = self.buildProxyURL(ytId: ytId) {
+                    self.downloadTrack(track, resolvedURL: proxyURL)
+                } else {
+                    self.states[ytId] = .failed("all: \(error.localizedDescription)")
+                    self.maybeStartQueued()
+                }
+            }
         }
-        downloadTrack(track, resolvedURL: proxyURL)
     }
 
-    /// URL del yt_proxy.php — resolución + 302 al googlevideo server-side.
+    /// URL del yt_proxy.php — fallback si extractor local falla.
     private func buildProxyURL(ytId: String) -> URL? {
         var comps = URLComponents(string: "https://temazo.es/api/yt_proxy.php")
-        comps?.queryItems = [
-            URLQueryItem(name: "id", value: ytId),
-            URLQueryItem(name: "format", value: "audio")  // hint al proxy: solo m4a
-        ]
+        comps?.queryItems = [URLQueryItem(name: "id", value: ytId)]
         return comps?.url
     }
 
@@ -202,10 +235,6 @@ final class DownloadManager: NSObject, ObservableObject {
         states[ytId] = .downloading(progress: 0)
         task.resume()
         print("[DL] START \(ytId) \(track.title)")
-        // BETA v1.2.4: prefetch — pre-calienta el cache del proxy para las próximas 2
-        // canciones. HEAD request es liviano y el proxy cachea 5min. Cuando toque
-        // realmente descargarlas, el 302 es casi instantáneo (sin re-resolver yt-dlp).
-        prefetchNextProxyURLs(count: 2)
         return true
     }
 
@@ -220,38 +249,19 @@ final class DownloadManager: NSObject, ObservableObject {
         }
     }
 
-    /// BETA v1.2.4: prefetch cache del proxy para las próximas N canciones en cola.
-    /// Un HEAD request es minimal (headers only) pero hace que yt_proxy.php resuelva
-    /// yt-dlp y guarde el 302 en su cache 5min. Cuando toque descargar en serio,
-    /// el proxy devuelve 302 instant (sin gastar tiempo re-resolviendo).
-    private func prefetchNextProxyURLs(count: Int) {
-        let upcoming = queuedTracks.prefix(count).compactMap { $0.0.youtubeId }
-        for ytId in upcoming {
-            guard let url = buildProxyURL(ytId: ytId) else { continue }
-            Task.detached(priority: .background) {
-                var req = URLRequest(url: url)
-                req.httpMethod = "HEAD"
-                req.timeoutInterval = 5
-                _ = try? await URLSession.shared.data(for: req)
-            }
-        }
-    }
+    // BETA v1.2.5: prefetch removido — ahora usamos extractor local, no proxy.
+    // El extractor local no cachea externamente; sí tiene cache in-memory que se
+    // aprovecha para la reproducción posterior.
 
-    /// BETA v1.2.4: sólo intenta arrancar UN task por invocación. Si arrancó,
-    /// el propio ciclo (delegate on finish) llama de nuevo. Si NO arrancó
-    /// (rate-limit / wifi), no seguimos drenando — evita loop infinito.
+    /// BETA v1.2.5: dequeue 1 track y re-resuelve URL vía extractor local.
+    /// Solo intenta arrancar UN task por invocación. Si arrancó, delegate llama de nuevo.
+    /// Si NO arrancó (rate-limit / wifi), no seguimos — evita loop infinito.
     private func maybeStartQueued() {
         guard activeTasks.count < maxConcurrent else { return }
         guard let (track, ytId) = queuedTracks.first else { return }
         queuedTracks.removeFirst()
-        guard let proxyURL = buildProxyURL(ytId: ytId) else {
-            states[ytId] = .failed("no proxy url")
-            // Continúa con la siguiente
-            maybeStartQueued()
-            return
-        }
-        // actuallyStart devuelve true si arrancó, false si re-encoló
-        _ = actuallyStart(track: track, ytId: ytId, url: proxyURL)
+        // Re-usar el flujo del autoresolve — respeta rate limit + fallback proxy
+        downloadTrackAutoResolve(track)
     }
 }
 
