@@ -45,10 +45,15 @@ jobs:
           gname = r.json()["data"][0]["attributes"]["name"]
           print(f"Grupo: {gname} id={gid}")
 
-          # Todos los builds ordenados por uploadedDate desc
-          r = requests.get(f"{BASE}/apps/{app_id}/builds", headers=H,
-                           params={"limit": 20, "sort": "-uploadedDate"})
+          # Todos los builds ordenados por uploadedDate desc — usar /v1/builds
+          r = requests.get(f"{BASE}/builds", headers=H,
+                           params={"filter[app]": app_id, "limit": 20,
+                                   "sort": "-uploadedDate"})
           builds = r.json().get("data", [])
+          if not builds:
+              print(f"NO BUILDS returned! Status={r.status_code}")
+              print(r.text[:500])
+              import sys; sys.exit(1)
           newest = builds[0]
           old = builds[1:]
           print(f"Newest: {newest['attributes']['version']}  (mantener)")
