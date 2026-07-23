@@ -1,0 +1,93 @@
+name: Fix - hasAccessToAllBuilds=True en el grupo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Grant group access to all builds
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, json, os
+          key_id = os.environ['KEY_ID']
+          issuer_id = os.environ['ISSUER_ID']
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          payload = {"iss": issuer_id, "iat": int(time.time()),
+                     "exp": int(time.time()) + 600, "aud": "appstoreconnect-v1"}
+          token = jwt.encode(payload, key, algorithm="ES256",
+                             headers={"kid": key_id, "typ": "JWT"})
+          H = {"Authorization": f"Bearer {token}",
+               "Content-Type": "application/json"}
+          BASE = "https://api.appstoreconnect.apple.com/v1"
+
+          # App + Group
+          r = requests.get(f"{BASE}/apps", headers=H,
+                           params={"filter[bundleId]": "es.temazo.app.beta"})
+          app_id = r.json()["data"][0]["id"]
+
+          r = requests.get(f"{BASE}/apps/{app_id}/betaGroups", headers=H)
+          group = r.json()["data"][0]
+          gid = group["id"]
+
+          # Query builds via /v1/builds
+          print("=== /v1/builds?filter[app] ===")
+          r = requests.get(f"{BASE}/builds", headers=H,
+                           params={"filter[app]": app_id, "limit": 20})
+          builds = r.json().get("data", [])
+          print(f"Encontrados {len(builds)} builds")
+          for b in builds:
+              ba = b["attributes"]
+              print(f"  id={b['id']} version={ba.get('version')} state={ba.get('processingState')} exp={ba.get('usesNonExemptEncryption')}")
+
+          # PATCH group hasAccessToAllBuilds
+          print(f"\n=== PATCH grupo hasAccessToAllBuilds=True ===")
+          body = {"data": {"type": "betaGroups", "id": gid,
+                           "attributes": {"hasAccessToAllBuilds": True}}}
+          r = requests.patch(f"{BASE}/betaGroups/{gid}", headers=H, json=body)
+          print(f"PATCH: HTTP {r.status_code}")
+          if r.status_code >= 300:
+              print(r.text[:600])
+
+          # Also POST each build to group explicitly
+          print("\n=== POST cada build al grupo (por si acaso) ===")
+          for b in builds:
+              bid = b["id"]
+              ver = b["attributes"].get("version")
+              body = {"data": [{"type": "betaGroups", "id": gid}]}
+              r2 = requests.post(f"{BASE}/builds/{bid}/relationships/betaGroups",
+                                 headers=H, json=body)
+              print(f"  Build {ver}: HTTP {r2.status_code}")
+              if r2.status_code >= 300: print(f"    {r2.text[:400]}")
+
+          # Estado final del grupo
+          print("\n=== Estado final del grupo ===")
+          r = requests.get(f"{BASE}/betaGroups/{gid}", headers=H)
+          ga = r.json()["data"]["attributes"]
+          print(json.dumps(ga, indent=2))
+
+          # Builds asociados al grupo
+          print("\n=== Builds asociados al grupo ===")
+          r = requests.get(f"{BASE}/betaGroups/{gid}/builds", headers=H)
+          for b in r.json().get("data", []):
+              ba = b["attributes"]
+              print(f"  {ba.get('version')} state={ba.get('processingState')}")
+          if not r.json().get("data"): print("  (ninguno via /betaGroups/{gid}/builds)")
+
+          print("\n=== DONE ===")
+          PYEOF
