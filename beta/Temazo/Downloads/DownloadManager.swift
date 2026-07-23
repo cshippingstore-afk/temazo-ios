@@ -39,6 +39,8 @@ final class DownloadManager: NSObject, ObservableObject {
     /// Meta pendiente por completar (necesitamos guardar el Track del que descargamos
     /// para poder llamar OfflineLibrary.registerDownload al terminar el URLSession delegate).
     private var pendingMeta: [Int: (track: Track, ytId: String)] = [:]  // taskIdentifier → meta
+    /// BETA v1.2: cache Track por ytId — sobrevive a failures, permite retry.
+    private var trackCache: [String: Track] = [:]
 
     private let netMonitor = NWPathMonitor()
     @Published private(set) var isOnWifi: Bool = false
@@ -89,6 +91,8 @@ final class DownloadManager: NSObject, ObservableObject {
     /// Convenience: si ya tienes la track resolveremos con extractor en 1 llamada.
     func downloadTrackAutoResolve(_ track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
+        // Cache Track para posible retry si falla el extractor
+        trackCache[ytId] = track
         if OfflineLibrary.shared.isDownloaded(ytId) {
             states[ytId] = .completed
             return
@@ -124,6 +128,22 @@ final class DownloadManager: NSObject, ObservableObject {
             enqueued += 1
         }
         return enqueued
+    }
+
+    /// BETA v1.2: reintenta todos los tracks en estado failed usando trackCache.
+    /// Idempotente — safe llamar múltiples veces.
+    func retryFailed() {
+        let failedIds = states.compactMap { (yt, st) -> String? in
+            if case .failed = st { return yt } else { return nil }
+        }
+        guard !failedIds.isEmpty else { return }
+        print("[DL] retryFailed: \(failedIds.count) tracks")
+        for yt in failedIds {
+            states.removeValue(forKey: yt)
+            if let track = trackCache[yt] {
+                downloadTrackAutoResolve(track)
+            }
+        }
     }
 
     /// Cancela y elimina.

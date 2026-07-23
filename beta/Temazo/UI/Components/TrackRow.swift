@@ -75,6 +75,12 @@ struct TrackRow: View {
                     Text(track.displayDuration)
                         .font(.system(size: 11)).foregroundStyle(.textMuted)
                 }
+                // BETA v1.2: pequeño ✓ verde si la canción está en offline library
+                if let yt = track.youtubeId, OfflineLibrary.shared.isDownloaded(yt) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(Color.green.opacity(0.85))
+                        .font(.system(size: 12))
+                }
                 Image(systemName: favorites.contains(track.id) ? "heart.fill" : "heart")
                     .foregroundStyle(favorites.contains(track.id) ? Color.neonPink : Color.textLow)
                     .font(.system(size: 14))

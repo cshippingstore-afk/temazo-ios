@@ -44,6 +44,12 @@ struct SettingsScreen: View {
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 12).fill(Color.bgSurface))
 
+                    // === DESCARGAS (BETA v1.2) ===
+                    sectionTitle("Descargas offline")
+                    downloadsSection
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.bgSurface))
+
                     // === CUENTA (solo si logueado) ===
                     if auth.currentUser != nil {
                         sectionTitle("Cuenta")
@@ -176,6 +182,83 @@ struct SettingsScreen: View {
                     }
                 )
             }
+        }
+    }
+
+    /// BETA v1.2: sección de descargas — 4 toggles + acción "Descargar todo ahora".
+    @ViewBuilder
+    private var downloadsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Toggle(isOn: $settings.autoDownloadFavorites) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Descargar favoritos al dar corazón")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Al pulsar 💖 la canción se guarda en el iPhone")
+                        .font(.system(size: 12)).foregroundStyle(.textLow)
+                }
+            }.tint(.neonPink)
+
+            Toggle(isOn: $settings.autoDownloadMyPlaylists) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Descargar mis playlists")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Todas las canciones de tus playlists van al iPhone")
+                        .font(.system(size: 12)).foregroundStyle(.textLow)
+                }
+            }.tint(.neonPink)
+
+            Toggle(isOn: $settings.autoDownloadFollowedPlaylists) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Descargar playlists que sigo")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Cuando sigues una playlist ajena, se descarga entera")
+                        .font(.system(size: 12)).foregroundStyle(.textLow)
+                }
+            }.tint(.neonPink)
+
+            Toggle(isOn: Binding(
+                get: { DownloadManager.shared.wifiOnly },
+                set: { DownloadManager.shared.wifiOnly = $0 }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Solo descargar en WiFi")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Evita consumir datos móviles (recomendado)")
+                        .font(.system(size: 12)).foregroundStyle(.textLow)
+                }
+            }.tint(.neonPink)
+
+            Toggle(isOn: $settings.offlineMode) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Modo offline")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Solo reproduce canciones ya descargadas")
+                        .font(.system(size: 12)).foregroundStyle(.textLow)
+                }
+            }.tint(.orange)
+
+            Button {
+                Task { await OfflineOrchestrator.shared.syncAllNow() }
+                showToast("Sincronizando descargas…")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("Sincronizar descargas ahora")
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Capsule().fill(Color.neonPink.opacity(0.85)))
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            // Status: cuántas descargadas + total MB
+            let n = OfflineLibrary.shared.tracks.count
+            let mb = Double(OfflineLibrary.shared.totalBytes()) / 1_048_576
+            let mbStr = mb >= 1000 ? String(format: "%.2f GB", mb / 1024) : String(format: "%.0f MB", mb)
+            Text("\(n) canciones · \(mbStr) en el iPhone")
+                .font(.system(size: 11)).foregroundStyle(.textLow)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 

@@ -27,9 +27,14 @@ struct TemazoApp: App {
                     // (respeta el toggle wifiOnly del user).
                     FavoritesRepo.shared.onFavoriteAdded = { track in
                         Task { @MainActor in
-                            DownloadManager.shared.downloadTrackAutoResolve(track)
+                            // Respeta el toggle: sólo descarga si el user tiene autoDownloadFavorites ON
+                            if SettingsRepo.shared.autoDownloadFavorites {
+                                DownloadManager.shared.downloadTrackAutoResolve(track)
+                            }
                         }
                     }
+                    // BETA v1.2: orquestador offline — cablea observers y watchdog
+                    OfflineOrchestrator.shared.start()
                 }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                     // Universal Link: alguien abrió un enlace temazo.es y la app
