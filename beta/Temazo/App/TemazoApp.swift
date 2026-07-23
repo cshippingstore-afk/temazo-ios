@@ -28,9 +28,23 @@ struct TemazoApp: App {
                     FavoritesRepo.shared.onFavoriteAdded = { track in
                         Task { @MainActor in
                             // Respeta el toggle: sólo descarga si el user tiene autoDownloadFavorites ON
-                            if SettingsRepo.shared.autoDownloadFavorites {
-                                DownloadManager.shared.downloadTrackAutoResolve(track)
+                            guard SettingsRepo.shared.autoDownloadFavorites else {
+                                print("[FavHook] autoDownloadFavorites OFF — no download")
+                                return
                             }
+                            let dm = DownloadManager.shared
+                            let wifiBlocked = dm.wifiOnly && !dm.isOnWifi
+                            let msg: String
+                            if wifiBlocked {
+                                msg = "⏸ En cola: \(track.title) — conecta WiFi"
+                            } else {
+                                msg = "🎵 Descargando: \(track.title)"
+                            }
+                            print("[FavHook] auto-download → \(msg)")
+                            NotificationCenter.default.post(
+                                name: .temazoShowToast, object: nil,
+                                userInfo: ["text": msg])
+                            dm.downloadTrackAutoResolve(track)
                         }
                     }
                     // BETA v1.2: orquestador offline — cablea observers y watchdog

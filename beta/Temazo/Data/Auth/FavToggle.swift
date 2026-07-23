@@ -54,4 +54,8 @@ extension Notification.Name {
     /// Disparada cuando el server confirma que se cerró sesión por su lado
     /// (token expirado, etc.) — la UI puede limpiar estado local.
     static let temazoSessionExpired = Notification.Name("temazoSessionExpired")
+
+    /// BETA v1.2.1: pedir mostrar un toast al usuario. userInfo["text"] = String.
+    /// MainScreen lo captura y lo pinta durante 2s.
+    static let temazoShowToast = Notification.Name("temazoShowToast")
 }

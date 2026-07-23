@@ -5,6 +5,9 @@ struct SettingsScreen: View {
     @EnvironmentObject var settings: SettingsRepo
     @EnvironmentObject var auth: AuthRepository
     @EnvironmentObject var favorites: FavoritesRepo
+    // BETA v1.2.1: observamos DL/lib para status live
+    @StateObject private var dm = DownloadManager.shared
+    @StateObject private var lib = OfflineLibrary.shared
 
     @State private var showPasswordChange = false
     @State private var showLogoutConfirm = false
@@ -252,14 +255,55 @@ struct SettingsScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
 
-            // Status: cuántas descargadas + total MB
-            let n = OfflineLibrary.shared.tracks.count
-            let mb = Double(OfflineLibrary.shared.totalBytes()) / 1_048_576
-            let mbStr = mb >= 1000 ? String(format: "%.2f GB", mb / 1024) : String(format: "%.0f MB", mb)
-            Text("\(n) canciones · \(mbStr) en el iPhone")
+            // Status live: descargando · en cola · descargadas + total MB
+            downloadStatusRow
+        }
+    }
+
+    /// Live status observing DownloadManager.$states + OfflineLibrary.$tracks
+    @ViewBuilder
+    private var downloadStatusRow: some View {
+        let states = DownloadManager.shared.states
+        let downloading = states.values.filter { if case .downloading = $0 { return true } else { return false } }.count
+        let queued = states.values.filter { if case .queued = $0 { return true } else { return false } }.count
+        let failed = states.values.filter { if case .failed = $0 { return true } else { return false } }.count
+        let n = OfflineLibrary.shared.tracks.count
+        let mb = Double(OfflineLibrary.shared.totalBytes()) / 1_048_576
+        let mbStr = mb >= 1000 ? String(format: "%.2f GB", mb / 1024) : String(format: "%.0f MB", mb)
+        let onWifi = DownloadManager.shared.isOnWifi
+
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                statBadge(icon: "checkmark.circle.fill", tint: .green,
+                          text: "\(n) descargadas")
+                if downloading > 0 {
+                    statBadge(icon: "arrow.down.circle", tint: .blue,
+                              text: "\(downloading) bajando")
+                }
+                if queued > 0 {
+                    statBadge(icon: "hourglass", tint: .yellow,
+                              text: "\(queued) en cola")
+                }
+                if failed > 0 {
+                    statBadge(icon: "exclamationmark.triangle.fill", tint: .red,
+                              text: "\(failed) fallos")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            Text("\(mbStr) en el iPhone · red: \(onWifi ? "WiFi ✓" : "Datos móviles")")
                 .font(.system(size: 11)).foregroundStyle(.textLow)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
+    }
+
+    private func statBadge(icon: String, tint: Color, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).foregroundStyle(tint).font(.system(size: 11))
+            Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Capsule().fill(tint.opacity(0.15)))
     }
 
     private func sectionTitle(_ s: String) -> some View {

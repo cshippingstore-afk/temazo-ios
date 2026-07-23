@@ -219,6 +219,11 @@ struct MainScreen: View {
                 .presentationDetents([.medium, .large])
         }
         .modifier(MainScreenDeepLinkListeners(detailStack: $detailStack, toastText: $toastText))
+        .onReceive(NotificationCenter.default.publisher(for: .temazoShowToast)) { notif in
+            if let text = notif.userInfo?["text"] as? String {
+                showToast(text)
+            }
+        }
         .onChange(of: player.state.currentTrack?.id) { _, newId in
             guard let id = newId else { return }
             guard auth.currentUser != nil else { return }
