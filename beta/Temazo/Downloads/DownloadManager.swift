@@ -35,21 +35,22 @@ final class DownloadManager: NSObject, ObservableObject {
     private var session: URLSession!
     private var activeTasks: [String: URLSessionDownloadTask] = [:]  // ytId → task
     private var queuedTracks: [(Track, String)] = []                 // pendientes cuando cap alcanzado
-    /// BETA v1.2.13 — 2 concurrent (evita burst race condition)
-    /// v1.2.12 tenía 4 concurrent que + race condition en lastExtractorCallAt
-    /// disparaba 4 requests Innertube simultáneos → YouTube soft rate limit → "no streams".
-    /// Con 2 concurrent + gap serializado, sigue siendo 2-3x más rápido que v1.2.10.
-    private let maxConcurrent = 2
+    /// BETA v1.2.14 — 6 concurrent. La race condition está arreglada con
+    /// acquireExtractorSlot (chain serializado), así que MÁS concurrencia
+    /// ya no causa burst en el extractor. URLSession.background maneja
+    /// hasta 6-8 tasks paralelas sin drama.
+    private let maxConcurrent = 6
     /// Meta pendiente por completar (necesitamos guardar el Track del que descargamos
     /// para poder llamar OfflineLibrary.registerDownload al terminar el URLSession delegate).
     private var pendingMeta: [Int: (track: Track, ytId: String)] = [:]  // taskIdentifier → meta
     /// BETA v1.2: cache Track por ytId — sobrevive a failures, permite retry.
     private var trackCache: [String: Track] = [:]
-    /// BETA v1.2.13: rate limit REAL SERIALIZADO via acquireExtractorSlot.
-    /// 1.5s entre calls consecutivos. Con maxConcurrent=2 + serial 1.5s = ~40 req/min
-    /// muy por debajo de cualquier techo de rate limit real de YouTube.
+    /// BETA v1.2.14: rate limit serial, 1s entre calls = 60 req/min.
+    /// Con maxConcurrent=6 y extractor a 60/min, el extractor sigue siendo
+    /// el rate limiter (6 downloads terminan antes que el próximo extract),
+    /// pero muy por debajo del techo real Innertube (>1000 req/min).
     private var lastExtractorCallAt: Date = .distantPast
-    private let extractorMinGap: TimeInterval = 1.5
+    private let extractorMinGap: TimeInterval = 1.0
     /// Task cadena serializada — cada llamada espera a la anterior.
     private var extractorChainTask: Task<Void, Never>? = nil
 
