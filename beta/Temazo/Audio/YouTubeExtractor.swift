@@ -56,11 +56,13 @@ final class YouTubeExtractor: NSObject {
     }
 
     override init() {
-        let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 8
+        let cfg = URLSessionConfiguration.ephemeral   // sesión limpia sin cookies persistidas
+        cfg.timeoutIntervalForRequest = 10
         cfg.httpMaximumConnectionsPerHost = 6
-        cfg.httpCookieAcceptPolicy = .always
+        cfg.httpCookieAcceptPolicy = .never           // BETA v1.2.9: cookies OFF — Innertube API no las quiere
+        cfg.httpShouldSetCookies = false
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.urlCache = nil
         self.session = URLSession(configuration: cfg)
         super.init()
         loadPersistedCache()
@@ -186,6 +188,10 @@ final class YouTubeExtractor: NSObject {
     ///   - JSON response bien estructurado, no HTML parsing
     ///   - URL firmada para IP del cliente que POSTea (iPhone) → sin throttle
     ///   - No dispara consent redirect (es API, no web)
+    /// BETA v1.2.9: SOLO ANDROID_VR — testado y confirmado como el único
+    /// que la Innertube API acepta con la key pública AIzaSyA8eiZmM1... sin auth.
+    /// (IOS/ANDROID clients devuelven 400 "failedPrecondition" — necesitan visitorData).
+    /// Sesión ephemeral sin cookies — evita conflicto con cookies de youtube.com.
     private func doExtract(videoID: String) async throws -> URL {
         let url = URL(string: "https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w")!
         var req = URLRequest(url: url)
@@ -193,9 +199,10 @@ final class YouTubeExtractor: NSObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
                      forHTTPHeaderField: "User-Agent")
-        req.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
+        // NO Accept-Encoding — que URLSession lo gestione automático
+        // NO Accept-Language — Innertube API no lo necesita
+        // NO cookies — sesión ephemeral
 
-        // Payload EXACTO del cliente ANDROID_VR (Quest 3) — devuelve URLs directas sin cipher
         let payload: [String: Any] = [
             "context": [
                 "client": [
@@ -207,9 +214,7 @@ final class YouTubeExtractor: NSObject {
                     "userAgent": "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
                     "osName": "Android",
                     "osVersion": "12L",
-                    "hl": "en",
-                    "gl": "US",
-                    "utcOffsetMinutes": 0
+                    "hl": "en", "gl": "US", "utcOffsetMinutes": 0
                 ]
             ],
             "videoId": videoID
@@ -217,14 +222,23 @@ final class YouTubeExtractor: NSObject {
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw ExtractorError.fetchFailed(0) }
-        guard (200..<300).contains(http.statusCode) else { throw ExtractorError.fetchFailed(http.statusCode) }
+        guard let http = resp as? HTTPURLResponse else {
+            print("[YTExtractor] \(videoID) no HTTP response")
+            throw ExtractorError.fetchFailed(0)
+        }
+        // BETA v1.2.9: log DETALLADO en fallo — sabemos exactamente qué devuelve YT
+        if !(200..<300).contains(http.statusCode) {
+            let bodyStr = String(data: data.prefix(300), encoding: .utf8) ?? "<binary>"
+            print("[YTExtractor] \(videoID) HTTP \(http.statusCode) body=\(bodyStr)")
+            throw ExtractorError.fetchFailed(http.statusCode)
+        }
 
         guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let bodyStr = String(data: data.prefix(300), encoding: .utf8) ?? "<binary>"
+            print("[YTExtractor] \(videoID) not JSON: \(bodyStr)")
             throw ExtractorError.noPlayerResponse
         }
 
-        // Chequeo playabilityStatus — algunos videos son private/deleted
         if let ps = parsed["playabilityStatus"] as? [String: Any],
            let status = ps["status"] as? String, status != "OK" {
             let reason = (ps["reason"] as? String) ?? status
@@ -233,6 +247,7 @@ final class YouTubeExtractor: NSObject {
         }
 
         guard let streamingData = parsed["streamingData"] as? [String: Any] else {
+            print("[YTExtractor] \(videoID) no streamingData in response")
             throw ExtractorError.noStreams
         }
         var formats: [[String: Any]] = []
@@ -240,16 +255,14 @@ final class YouTubeExtractor: NSObject {
         if let f = streamingData["formats"] as? [[String: Any]] { formats.append(contentsOf: f) }
         if formats.isEmpty { throw ExtractorError.noStreams }
 
-        // Audio-only, mejor bitrate primero. Preferir itag 140 (m4a AAC 128kbps) sobre
-        // 251 (opus 130kbps) porque AVPlayer no toca opus nativo.
+        // Preferir audio/mp4 (itag 140 AAC 128kbps) que AVPlayer toca nativo.
+        // Ignorar audio/webm opus (251) — AVPlayer no toca opus.
         var audios = formats.filter {
             let mime = ($0["mimeType"] as? String) ?? ""
             return mime.hasPrefix("audio/mp4") || mime.hasPrefix("audio/mpeg")
         }
-        if audios.isEmpty {
-            audios = formats.filter { ($0["mimeType"] as? String)?.hasPrefix("audio/") ?? false }
-        }
-        if audios.isEmpty { audios = formats }  // último recurso
+        if audios.isEmpty { audios = formats.filter { ($0["mimeType"] as? String)?.hasPrefix("audio/") ?? false } }
+        if audios.isEmpty { audios = formats }
         audios.sort { ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0) }
 
         for f in audios {
@@ -257,7 +270,6 @@ final class YouTubeExtractor: NSObject {
                 return url
             }
         }
-        // ANDROID_VR raramente devuelve signatureCipher, pero por si acaso
         throw ExtractorError.signatureCipher
     }
 

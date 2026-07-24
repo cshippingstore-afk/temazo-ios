@@ -266,6 +266,26 @@ struct SettingsScreen: View {
                     .padding(.horizontal, 12).padding(.vertical, 10)
                     .background(Capsule().fill(Color.green.opacity(0.75)))
                 }
+                Button {
+                    Task {
+                        showToast("Probando extractor…")
+                        do {
+                            let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: "dQw4w9WgXcQ", timeoutSec: 15)
+                            showToast("✓ Extractor OK: \(url.host ?? "?")")
+                        } catch {
+                            showToast("✗ Extractor FAIL: \(error.localizedDescription)")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "network")
+                        Text("Test")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(Capsule().fill(Color.blue.opacity(0.75)))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .center)
 
