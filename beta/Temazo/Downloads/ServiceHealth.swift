@@ -57,9 +57,14 @@ final class ServiceHealth: ObservableObject {
     }
 
     /// Reporta fallo. Si superamos threshold, abre el circuit por `cooldown`.
-    /// Devuelve true si acaba de abrirse (para mostrar toast).
+    /// Devuelve true si ACABA DE abrirse ahora (para mostrar toast SOLO 1 vez por apertura).
+    /// BETA v1.2.15: si ya estaba degraded, NO devuelve true (no spamea toasts).
     @discardableResult
     func reportFailure(_ s: Service, error: String) -> Bool {
+        let wasAlreadyDegraded: Bool = {
+            if case .degraded = get(s) { return true } else { return false }
+        }()
+
         let count: Int
         switch s {
         case .extractor:
@@ -73,8 +78,12 @@ final class ServiceHealth: ObservableObject {
         if count >= threshold {
             let until = Date().addingTimeInterval(cooldown)
             set(s, state: .degraded(until: until, lastError: error))
-            print("[Health] \(s.rawValue) DEGRADED (\(count) fails) hasta \(until) — \(error)")
-            return true
+            // Solo trigger toast si acaba de abrirse ahora — NO si ya estaba degraded
+            if !wasAlreadyDegraded {
+                print("[Health] \(s.rawValue) DEGRADED (\(count) fails) hasta \(until) — \(error)")
+                return true
+            }
+            return false
         }
         return false
     }

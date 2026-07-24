@@ -319,11 +319,16 @@ final class DownloadManager: NSObject, ObservableObject {
     // El extractor local no cachea externamente; sí tiene cache in-memory que se
     // aprovecha para la reproducción posterior.
 
-    /// BETA v1.2.12: rellenar los slots libres hasta maxConcurrent, pero ACOTADO.
-    /// Dequeueamos como mucho `slotsToFill` items (activeTasks aún no incrementa
-    /// sincronamente porque el extractor es async, así que un while sin límite
-    /// vaciaría la cola de golpe).
+    /// BETA v1.2.15: si ambos servicios están degraded, NO dequeueamos.
+    /// Los tracks quedan en cola esperando que uno de los dos servicios recupere.
+    /// Cuando el cooldown expire, un watchdog llama a maybeStartQueued de nuevo.
+    /// Evita cascada de fallos + toasts.
     private func maybeStartQueued() {
+        let health = ServiceHealth.shared
+        if !health.isAvailable(.extractor) && !health.isAvailable(.proxy) {
+            // Ambos degraded — no seguir bombardeando, esperamos cooldown
+            return
+        }
         let slotsToFill = maxConcurrent - activeTasks.count
         guard slotsToFill > 0 else { return }
         for _ in 0..<slotsToFill {

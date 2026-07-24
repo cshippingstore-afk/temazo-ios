@@ -37,6 +37,8 @@ final class OfflineOrchestrator: ObservableObject {
         DownloadManager.shared.clearFailedStates()
         // BETA v1.2.10: purgar descargas con formato incorrecto (webm/HTML disfrazados)
         OfflineLibrary.shared.purgeCorrupted()
+        // BETA v1.2.15: reset ServiceHealth al arrancar — evitar arrastrar degraded state viejo
+        ServiceHealth.shared.resetAll()
 
         // 1. BOOT: dispara sync inmediato en cuanto haya sesión + red viable.
         //    Sin esperar cambios de red — puede que ya estés en WiFi al arrancar.
