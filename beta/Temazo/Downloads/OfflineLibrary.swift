@@ -167,4 +167,33 @@ final class OfflineLibrary: ObservableObject {
             saveToDisk()
         }
     }
+
+    /// BETA v1.2.10: purgar descargas corruptas (webm/opus/HTML disfrazadas de m4a).
+    /// Se ejecuta al arrancar la app — evita que el user vea "descargada" pero no suene.
+    /// Los tracks purgados quedan sin OfflineLibrary entry → se re-descargan al próximo sync.
+    func purgeCorrupted() {
+        var purged = 0
+        for entry in tracks {
+            let file = downloadsDir.appendingPathComponent("\(entry.youtube_id).m4a")
+            guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
+            let magic = handle.readData(ofLength: 12)
+            try? handle.close()
+            guard magic.count >= 8 else { continue }
+            let b = [UInt8](magic)
+            let isM4A = b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70
+            if !isM4A {
+                try? FileManager.default.removeItem(at: file)
+                purged += 1
+            }
+        }
+        if purged > 0 {
+            let before = tracks.count
+            tracks.removeAll { entry in
+                let file = downloadsDir.appendingPathComponent("\(entry.youtube_id).m4a")
+                return !FileManager.default.fileExists(atPath: file.path)
+            }
+            print("[OfflineLib] purged \(purged) corrupted files (before=\(before) after=\(tracks.count))")
+            saveToDisk()
+        }
+    }
 }

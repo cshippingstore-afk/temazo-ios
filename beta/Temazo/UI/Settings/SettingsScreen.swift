@@ -252,10 +252,16 @@ struct SettingsScreen: View {
                     .background(Capsule().fill(Color.neonPink.opacity(0.85)))
                 }
                 Button {
+                    // BETA v1.2.10: orden correcto
+                    // 1. reset circuit breakers
+                    // 2. retryFailed usando trackCache (antes de limpiar states)
+                    // 3. limpiar failed states restantes
+                    // 4. Force full sync para re-encolar todo (por si trackCache estaba vacío)
                     ServiceHealth.shared.resetAll()
-                    DownloadManager.shared.clearFailedStates()
                     DownloadManager.shared.retryFailed()
-                    showToast("Reintentando…")
+                    DownloadManager.shared.clearFailedStates()
+                    Task { await OfflineOrchestrator.shared.syncAllNow(force: true) }
+                    showToast("Reset + reintentando…")
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "bolt.badge.checkmark")

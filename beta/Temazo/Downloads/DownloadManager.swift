@@ -351,6 +351,35 @@ extension DownloadManager: URLSessionDownloadDelegate {
         if errorMsg == nil && tmpSize < 50_000 {
             errorMsg = "size \(tmpSize) too small (proxy error?)"
         }
+        // BETA v1.2.10: validar MAGIC BYTES del archivo.
+        // .m4a legítimo empieza por bytes ".. .. .. .. f t y p" (ftyp box en offset 4-7).
+        // .webm empieza por 1A 45 DF A3 — AVPlayer NO lo toca → guardarlo es un error.
+        // HTML empieza por "<htm" (0x3c 0x68 0x74 0x6d) — obvio.
+        if errorMsg == nil {
+            if let handle = try? FileHandle(forReadingFrom: location) {
+                let magic = handle.readData(ofLength: 12)
+                try? handle.close()
+                if magic.count >= 8 {
+                    let bytes = [UInt8](magic)
+                    // ftyp en offset 4-7 = ISO base media (.m4a/.mp4)
+                    let isM4A = bytes.count >= 8 &&
+                        bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70
+                    // EBML header 1A 45 DF A3 = webm/opus (AVPlayer NO puede)
+                    let isWebm = bytes[0] == 0x1A && bytes[1] == 0x45 && bytes[2] == 0xDF && bytes[3] == 0xA3
+                    // HTML "<" bang
+                    let isHTML = bytes[0] == 0x3C
+                    if isWebm {
+                        errorMsg = "webm/opus rechazado (AVPlayer no lo toca)"
+                    } else if isHTML {
+                        errorMsg = "HTML error page (no m4a)"
+                    } else if !isM4A {
+                        // Formato desconocido — mejor rechazar que guardar basura
+                        let hex = bytes.prefix(8).map { String(format: "%02x", $0) }.joined()
+                        errorMsg = "formato desconocido bytes=\(hex)"
+                    }
+                }
+            }
+        }
         let dest = OfflineLibrary.shared.destinationURL(for: meta.ytId)
         if errorMsg == nil {
             do {

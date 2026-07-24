@@ -35,6 +35,8 @@ final class OfflineOrchestrator: ObservableObject {
         // BETA v1.2.6: limpiar failed states de sesiones previas antes de sync
         // (user no ve "6 fallos" viejos, se re-encolan como queued).
         DownloadManager.shared.clearFailedStates()
+        // BETA v1.2.10: purgar descargas con formato incorrecto (webm/HTML disfrazados)
+        OfflineLibrary.shared.purgeCorrupted()
 
         // 1. BOOT: dispara sync inmediato en cuanto haya sesión + red viable.
         //    Sin esperar cambios de red — puede que ya estés en WiFi al arrancar.
