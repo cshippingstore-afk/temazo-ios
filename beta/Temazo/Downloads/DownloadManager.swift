@@ -62,10 +62,12 @@ final class DownloadManager: NSObject, ObservableObject {
         config.isDiscretionary = false                 // urgente, no diferir
         config.sessionSendsLaunchEvents = true         // relanzar app al terminar en bg
         config.allowsCellularAccess = true             // el filtro WiFi lo hacemos nosotros con el monitor
-        // BETA v1.2.5: TIMEOUTS AGRESIVOS. Defaults background son 60s req + 7 DIAS resource.
-        // Con 7 dias, un proxy que cuelga bloquea la cola una semana. Forzamos fallo rápido.
-        config.timeoutIntervalForRequest = 30          // 30s por request
-        config.timeoutIntervalForResource = 90         // 90s max por descarga entera
+        // BETA v1.2.11: timeouts calibrados con logs reales
+        //  - Request 30s: rápido para detectar proxy 502
+        //  - Resource 300s (5min): audio de 5-10MB en WiFi lento entra sin problema.
+        //    Antes 90s cortaba audios largos → -1001 timeout → circuit breaker → boom.
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 300
         self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
 
         // Network monitor: sabe si estamos en WiFi o cellular
@@ -396,7 +398,11 @@ extension DownloadManager: URLSessionDownloadDelegate {
             // Limpiar el file basura del temp path
             try? FileManager.default.removeItem(at: location)
         }
-        // BETA v1.2.7: identifica qué servicio se usó por la URL para reportar health
+        // BETA v1.2.11: NO reportamos éxito/fallo al circuit breaker del EXTRACTOR
+        // basándonos en el download final. El extractor YA hizo su trabajo dando la URL.
+        // Los fails del download (timeout, expired URL, googlevideo throttle) NO son
+        // culpa del extractor. Sólo reportamos al circuit breaker PROXY porque si el
+        // download vía temazo.es falla, sí es culpa del proxy.
         let usedProxy = downloadTask.originalRequest?.url?.host?.contains("temazo.es") == true
         let localErrorMsg = errorMsg
         let localSavedSize = savedSize
@@ -407,19 +413,24 @@ extension DownloadManager: URLSessionDownloadDelegate {
             self.activeTasks.removeValue(forKey: meta.ytId)
             if let err = localErrorMsg {
                 self.states[meta.ytId] = .failed(err)
-                // Reportar fallo al servicio usado
-                let service: ServiceHealth.Service = usedProxy ? .proxy : .extractor
-                let opened = ServiceHealth.shared.reportFailure(service, error: err)
-                if opened {
-                    NotificationCenter.default.post(
-                        name: .temazoShowToast, object: nil,
-                        userInfo: ["text": "⚠️ \(service.rawValue) limitado — reintento en 5min"])
+                if usedProxy {
+                    let opened = ServiceHealth.shared.reportFailure(.proxy, error: err)
+                    if opened {
+                        NotificationCenter.default.post(
+                            name: .temazoShowToast, object: nil,
+                            userInfo: ["text": "⚠️ Proxy VPS limitado — reintento en 5min"])
+                    }
                 }
+                // Si usedProxy=false (googlevideo directo), NO tocamos ServiceHealth.
+                // El extractor funcionó correctamente. El fallo es del download.
             } else if localSavedTo != nil {
                 OfflineLibrary.shared.registerDownload(youtubeId: meta.ytId, track: meta.track, sizeBytes: localSavedSize)
                 self.states[meta.ytId] = .completed
-                // Reportar éxito al servicio
-                ServiceHealth.shared.reportSuccess(usedProxy ? .proxy : .extractor)
+                if usedProxy {
+                    ServiceHealth.shared.reportSuccess(.proxy)
+                }
+                // BETA v1.2.11: éxito de download desde googlevideo = confirma extractor OK
+                ServiceHealth.shared.reportSuccess(.extractor)
                 print("[DL] DONE \(meta.ytId) size=\(localSavedSize) via=\(usedProxy ? "proxy" : "extractor")")
             }
             self.maybeStartQueued()
@@ -430,7 +441,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
                                 didCompleteWithError error: Error?) {
         guard let error = error else { return }
         let taskId = task.taskIdentifier
-        // BETA v1.2.7: identifica qué servicio se usó por la URL para health
+        // BETA v1.2.11: mismo criterio — solo culpar al PROXY si el fallo viene del proxy
         let usedProxy = task.originalRequest?.url?.host?.contains("temazo.es") == true
         Task { @MainActor [weak self] in
             guard let self = self else { return }
@@ -438,9 +449,12 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 self.states[meta.ytId] = .failed(error.localizedDescription)
                 self.pendingMeta.removeValue(forKey: taskId)
                 self.activeTasks.removeValue(forKey: meta.ytId)
-                let service: ServiceHealth.Service = usedProxy ? .proxy : .extractor
-                ServiceHealth.shared.reportFailure(service, error: error.localizedDescription)
-                print("[DL] FAILED \(meta.ytId): \(error.localizedDescription) via=\(service.rawValue)")
+                // BETA v1.2.11: solo culpar al proxy si fue vía proxy.
+                // Download fail vía googlevideo (extractor URL) NO es culpa del extractor.
+                if usedProxy {
+                    ServiceHealth.shared.reportFailure(.proxy, error: error.localizedDescription)
+                }
+                print("[DL] FAILED \(meta.ytId): \(error.localizedDescription) via=\(usedProxy ? "proxy" : "googlevideo")")
                 self.maybeStartQueued()
             }
         }
