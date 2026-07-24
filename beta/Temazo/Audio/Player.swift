@@ -218,27 +218,50 @@ final class Player: NSObject, ObservableObject {
             return
         }
 
-        // Paso 2 + 3: extractor live primero, proxy como fallback
+        // BETA v1.2.7: circuit breaker — skip services degraded para no bloquear al user
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             let stillCurrent = { self.state.currentTrack?.id == track.id }
+            let health = ServiceHealth.shared
 
-            if let directURL = try? await YouTubeExtractor.shared.extractStreamURL(
-                videoID: ytId, timeoutSec: 8
-            ), stillCurrent() {
-                self.startWithURL(directURL, track: track, source: "extractor-live")
+            // Paso 2: extractor local (si healthy)
+            if health.isAvailable(.extractor) {
+                do {
+                    let directURL = try await YouTubeExtractor.shared.extractStreamURL(
+                        videoID: ytId, timeoutSec: 8)
+                    if stillCurrent() {
+                        health.reportSuccess(.extractor)
+                        self.startWithURL(directURL, track: track, source: "extractor-live")
+                        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+                        return
+                    }
+                } catch {
+                    health.reportFailure(.extractor, error: error.localizedDescription)
+                    print("[Player] extractor fail: \(error.localizedDescription)")
+                }
+            } else {
+                print("[Player] extractor DEGRADED, skipping to proxy")
+            }
+
+            guard stillCurrent() else { return }
+
+            // Paso 3: proxy VPS (si healthy)
+            if health.isAvailable(.proxy) {
+                guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
+                    self.state.lastError = "no url"; self.state.loadingState = .failed
+                    return
+                }
+                self.startWithURL(proxyURL, track: track, source: "proxy-302-fallback")
                 TemazoAPI.shared.prefetchYouTubeURLs([ytId])
                 return
             }
 
-            // Fallback: proxy 302 (throttled pero funciona)
-            guard stillCurrent() else { return }
-            guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
-                self.state.lastError = "no url"; self.state.loadingState = .failed
-                return
-            }
-            self.startWithURL(proxyURL, track: track, source: "proxy-302-fallback")
-            TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+            // Ambos degraded — error claro al user (no rueda infinita)
+            self.state.lastError = "Servicio limitado — reintenta en 5min"
+            self.state.loadingState = .failed
+            NotificationCenter.default.post(
+                name: .temazoShowToast, object: nil,
+                userInfo: ["text": "⚠️ Servicio limitado — reintenta en 5min"])
         }
     }
 

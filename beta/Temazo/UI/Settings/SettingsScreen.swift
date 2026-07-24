@@ -8,6 +8,8 @@ struct SettingsScreen: View {
     // BETA v1.2.1: observamos DL/lib para status live
     @StateObject private var dm = DownloadManager.shared
     @StateObject private var lib = OfflineLibrary.shared
+    // BETA v1.2.7: health del extractor/proxy (badges live)
+    @StateObject private var health = ServiceHealth.shared
 
     @State private var showPasswordChange = false
     @State private var showLogoutConfirm = false
@@ -235,20 +237,40 @@ struct SettingsScreen: View {
             // y bloqueaba streaming. El offline REAL ya funciona automático:
             // si hay archivo local se usa, si no se stream. No hace falta bloquear.
 
-            Button {
-                Task { await OfflineOrchestrator.shared.syncAllNow() }
-                showToast("Sincronizando descargas…")
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                    Text("Sincronizar descargas ahora")
+            HStack(spacing: 10) {
+                Button {
+                    Task { await OfflineOrchestrator.shared.syncAllNow(force: true) }
+                    showToast("Sincronizando descargas…")
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Sincronizar")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(Capsule().fill(Color.neonPink.opacity(0.85)))
                 }
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Capsule().fill(Color.neonPink.opacity(0.85)))
+                Button {
+                    ServiceHealth.shared.resetAll()
+                    DownloadManager.shared.clearFailedStates()
+                    DownloadManager.shared.retryFailed()
+                    showToast("Reintentando…")
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.badge.checkmark")
+                        Text("Reintentar")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(Capsule().fill(Color.green.opacity(0.75)))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .center)
+
+            // Health del servicio (extractor + proxy) — visible al user
+            serviceHealthRow
 
             // Status live: descargando · en cola · descargadas + total MB
             downloadStatusRow
@@ -299,6 +321,39 @@ struct SettingsScreen: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(Capsule().fill(tint.opacity(0.15)))
+    }
+
+    /// BETA v1.2.7: health de cada servicio (extractor + proxy), user ve claramente
+    /// cuándo YouTube o VPS están limitando. Botón manual "Reset" reactiva ambos.
+    @ViewBuilder
+    private var serviceHealthRow: some View {
+        let health = ServiceHealth.shared
+        VStack(spacing: 6) {
+            Divider().background(Color.white.opacity(0.05))
+            HStack(spacing: 10) {
+                healthBadge(label: "YouTube",
+                            state: health.extractor,
+                            help: health.summary(.extractor))
+                healthBadge(label: "Proxy",
+                            state: health.proxy,
+                            help: health.summary(.proxy))
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private func healthBadge(label: String, state: ServiceHealth.State, help: String) -> some View {
+        let isOk: Bool = { if case .ok = state { return true } else { return false } }()
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(isOk ? Color.green : Color.orange)
+                .frame(width: 6, height: 6)
+            Text("\(label): \(help)")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(isOk ? Color.textLow : Color.orange)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Capsule().fill((isOk ? Color.green : Color.orange).opacity(0.08)))
     }
 
     private func sectionTitle(_ s: String) -> some View {

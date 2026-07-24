@@ -1,0 +1,67 @@
+name: Deploy files to VPS temazo.es (via SFTP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: 'Archivo local a subir (relative from repo)'
+        required: true
+        default: 'vps_deploy/yt_proxy.php'
+      remote_path:
+        description: 'Destino en el VPS (absolute path)'
+        required: true
+        default: '/var/www/vhosts/temazo.es/httpdocs/api/yt_proxy.php'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y sshpass
+
+      - name: Backup del archivo actual + subir el nuevo
+        env:
+          VPS_HOST: ${{ secrets.VPS_SFTP_HOST }}
+          VPS_USER: ${{ secrets.VPS_SFTP_USER }}
+          VPS_PASS: ${{ secrets.VPS_SFTP_PASSWORD }}
+          FILE_LOCAL: ${{ github.event.inputs.file }}
+          FILE_REMOTE: ${{ github.event.inputs.remote_path }}
+        run: |
+          if [ ! -f "$FILE_LOCAL" ]; then
+            echo "❌ Archivo local no existe: $FILE_LOCAL"
+            exit 1
+          fi
+
+          echo "📦 Subiendo $FILE_LOCAL → $VPS_HOST:$FILE_REMOTE"
+
+          # Batch script para sftp: backup + put
+          cat > /tmp/sftp_cmds <<EOF
+          -rm ${FILE_REMOTE}.bak
+          -rename ${FILE_REMOTE} ${FILE_REMOTE}.bak
+          put ${FILE_LOCAL} ${FILE_REMOTE}
+          bye
+          EOF
+
+          sshpass -p "$VPS_PASS" sftp -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -b /tmp/sftp_cmds \
+            "$VPS_USER@$VPS_HOST"
+
+          echo "✓ Deploy hecho"
+
+      - name: Verificar el archivo desplegado
+        env:
+          FILE_REMOTE: ${{ github.event.inputs.remote_path }}
+        run: |
+          # Convertir path del VPS al URL público (asume /var/www/vhosts/temazo.es/httpdocs/X → https://temazo.es/X)
+          PUBLIC_URL=$(echo "$FILE_REMOTE" | sed 's|/var/www/vhosts/temazo.es/httpdocs|https://temazo.es|')
+          echo "URL pública: $PUBLIC_URL"
+          # Test rápido: HEAD la ruta (excepto si es .php sin id, que puede dar 400)
+          if [[ "$PUBLIC_URL" == *yt_proxy.php ]]; then
+            echo "Test con id conocido:"
+            curl -sk -I -m 15 "${PUBLIC_URL}?id=dQw4w9WgXcQ" | head -3
+          fi

@@ -119,6 +119,7 @@ final class DownloadManager: NSObject, ObservableObject {
     ///   - Total: 12 requests/min máximo (memoria dice ≤6w+3s = safe, esto es más conservador)
     ///
     /// Fallback si extractor falla (raro): proxy VPS (throttled pero funciona)
+    /// BETA v1.2.7: circuit breaker per source. Salta el que esté degraded.
     func downloadTrackAutoResolve(_ track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
         trackCache[ytId] = track
@@ -128,32 +129,56 @@ final class DownloadManager: NSObject, ObservableObject {
         }
         states[ytId] = .queued
         Task { @MainActor in
-            // 1. Cache hit — instantáneo, no cuenta como request
+            // 1. Cache hit del extractor (siempre válido, no cuenta como request)
             if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
                 self.downloadTrack(track, resolvedURL: cached)
                 return
             }
-            // 2. Pausa 5s entre extractores para safe rate limit
-            let elapsed = Date().timeIntervalSince(self.lastExtractorCallAt)
-            if elapsed < self.extractorMinGap {
-                let wait = self.extractorMinGap - elapsed
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+
+            let health = ServiceHealth.shared
+            let extractorAvailable = health.isAvailable(.extractor)
+            let proxyAvailable = health.isAvailable(.proxy)
+
+            // 2. Si ambos servicios están degraded, marca failed y espera cooldown
+            if !extractorAvailable && !proxyAvailable {
+                self.states[ytId] = .failed("servicio bloqueado — reintenta en 5min")
+                self.maybeStartQueued()
+                return
             }
-            self.lastExtractorCallAt = Date()
-            // 3. Extractor local con timeout
-            do {
-                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
-                self.downloadTrack(track, resolvedURL: url)
-            } catch {
-                // 4. FALLBACK proxy — lento pero funciona si el extractor tiene un mal día
-                print("[DL] \(ytId) extractor fail → proxy fallback: \(error.localizedDescription)")
-                if let proxyURL = self.buildProxyURL(ytId: ytId) {
-                    self.downloadTrack(track, resolvedURL: proxyURL)
-                } else {
-                    self.states[ytId] = .failed("all: \(error.localizedDescription)")
-                    self.maybeStartQueued()
+
+            // 3. Extractor local (si está healthy)
+            if extractorAvailable {
+                let elapsed = Date().timeIntervalSince(self.lastExtractorCallAt)
+                if elapsed < self.extractorMinGap {
+                    try? await Task.sleep(nanoseconds: UInt64((self.extractorMinGap - elapsed) * 1_000_000_000))
+                }
+                self.lastExtractorCallAt = Date()
+                do {
+                    let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
+                    health.reportSuccess(.extractor)
+                    self.downloadTrack(track, resolvedURL: url)
+                    return
+                } catch {
+                    let opened = health.reportFailure(.extractor, error: error.localizedDescription)
+                    print("[DL] \(ytId) extractor fail: \(error.localizedDescription)\(opened ? " (CIRCUIT OPENED)" : "")")
+                    if opened {
+                        NotificationCenter.default.post(
+                            name: .temazoShowToast, object: nil,
+                            userInfo: ["text": "⚠️ YouTube limitando — reintento en 5min"])
+                    }
+                    // cae al proxy
                 }
             }
+
+            // 4. Proxy VPS (si está healthy)
+            if proxyAvailable, let proxyURL = self.buildProxyURL(ytId: ytId) {
+                self.downloadTrack(track, resolvedURL: proxyURL)
+                return
+            }
+
+            // 5. Sin opciones
+            self.states[ytId] = .failed("todos los servicios bloqueados")
+            self.maybeStartQueued()
         }
     }
 
@@ -342,16 +367,31 @@ extension DownloadManager: URLSessionDownloadDelegate {
             // Limpiar el file basura del temp path
             try? FileManager.default.removeItem(at: location)
         }
+        // BETA v1.2.7: identifica qué servicio se usó por la URL para reportar health
+        let usedProxy = downloadTask.originalRequest?.url?.host?.contains("temazo.es") == true
+        let localErrorMsg = errorMsg
+        let localSavedSize = savedSize
+        let localSavedTo = savedTo
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             self.pendingMeta.removeValue(forKey: taskId)
             self.activeTasks.removeValue(forKey: meta.ytId)
-            if let err = errorMsg {
+            if let err = localErrorMsg {
                 self.states[meta.ytId] = .failed(err)
-            } else if savedTo != nil {
-                OfflineLibrary.shared.registerDownload(youtubeId: meta.ytId, track: meta.track, sizeBytes: savedSize)
+                // Reportar fallo al servicio usado
+                let service: ServiceHealth.Service = usedProxy ? .proxy : .extractor
+                let opened = ServiceHealth.shared.reportFailure(service, error: err)
+                if opened {
+                    NotificationCenter.default.post(
+                        name: .temazoShowToast, object: nil,
+                        userInfo: ["text": "⚠️ \(service.rawValue) limitado — reintento en 5min"])
+                }
+            } else if localSavedTo != nil {
+                OfflineLibrary.shared.registerDownload(youtubeId: meta.ytId, track: meta.track, sizeBytes: localSavedSize)
                 self.states[meta.ytId] = .completed
-                print("[DL] DONE \(meta.ytId) size=\(savedSize)")
+                // Reportar éxito al servicio
+                ServiceHealth.shared.reportSuccess(usedProxy ? .proxy : .extractor)
+                print("[DL] DONE \(meta.ytId) size=\(localSavedSize) via=\(usedProxy ? "proxy" : "extractor")")
             }
             self.maybeStartQueued()
         }
@@ -361,13 +401,17 @@ extension DownloadManager: URLSessionDownloadDelegate {
                                 didCompleteWithError error: Error?) {
         guard let error = error else { return }
         let taskId = task.taskIdentifier
+        // BETA v1.2.7: identifica qué servicio se usó por la URL para health
+        let usedProxy = task.originalRequest?.url?.host?.contains("temazo.es") == true
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             if let meta = self.pendingMeta[taskId] {
                 self.states[meta.ytId] = .failed(error.localizedDescription)
                 self.pendingMeta.removeValue(forKey: taskId)
                 self.activeTasks.removeValue(forKey: meta.ytId)
-                print("[DL] FAILED \(meta.ytId): \(error.localizedDescription)")
+                let service: ServiceHealth.Service = usedProxy ? .proxy : .extractor
+                ServiceHealth.shared.reportFailure(service, error: error.localizedDescription)
+                print("[DL] FAILED \(meta.ytId): \(error.localizedDescription) via=\(service.rawValue)")
                 self.maybeStartQueued()
             }
         }
