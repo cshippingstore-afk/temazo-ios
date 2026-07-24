@@ -35,25 +35,40 @@ final class DownloadManager: NSObject, ObservableObject {
     private var session: URLSession!
     private var activeTasks: [String: URLSessionDownloadTask] = [:]  // ytId → task
     private var queuedTracks: [(Track, String)] = []                 // pendientes cuando cap alcanzado
-    /// BETA v1.2.12 — 4 DESCARGAS EN PARALELO
-    /// User pidió que vaya rápido. Usamos googlevideo directo (URL firmada
-    /// para IP del iPhone), no la API pública de YouTube. googlevideo NO banea
-    /// por concurrencia — es un CDN de audio designed para múltiples streams.
-    /// Con 4 en paralelo:
-    ///   - Bandwidth WiFi máximo aprovechado
-    ///   - ~4x más rápido que secuencial
-    ///   - Extractor sigue rate-limited (0.5s entre calls) para safe vs YT
-    private let maxConcurrent = 4
+    /// BETA v1.2.13 — 2 concurrent (evita burst race condition)
+    /// v1.2.12 tenía 4 concurrent que + race condition en lastExtractorCallAt
+    /// disparaba 4 requests Innertube simultáneos → YouTube soft rate limit → "no streams".
+    /// Con 2 concurrent + gap serializado, sigue siendo 2-3x más rápido que v1.2.10.
+    private let maxConcurrent = 2
     /// Meta pendiente por completar (necesitamos guardar el Track del que descargamos
     /// para poder llamar OfflineLibrary.registerDownload al terminar el URLSession delegate).
     private var pendingMeta: [Int: (track: Track, ytId: String)] = [:]  // taskIdentifier → meta
     /// BETA v1.2: cache Track por ytId — sobrevive a failures, permite retry.
     private var trackCache: [String: Track] = [:]
-    /// BETA v1.2.12: pausa 0.5s entre extractores. Innertube API oficial YT no banea
-    /// por tráfico normal — validado en test real 20 requests en 45s sin problema.
-    /// 120 req/min = holgado, con cache local reduce mucho.
+    /// BETA v1.2.13: rate limit REAL SERIALIZADO via acquireExtractorSlot.
+    /// 1.5s entre calls consecutivos. Con maxConcurrent=2 + serial 1.5s = ~40 req/min
+    /// muy por debajo de cualquier techo de rate limit real de YouTube.
     private var lastExtractorCallAt: Date = .distantPast
-    private let extractorMinGap: TimeInterval = 0.5
+    private let extractorMinGap: TimeInterval = 1.5
+    /// Task cadena serializada — cada llamada espera a la anterior.
+    private var extractorChainTask: Task<Void, Never>? = nil
+
+    /// BETA v1.2.13: adquiere un "turno" para llamar al extractor.
+    /// Se serializa via chain de Tasks — imposible burst por concurrencia.
+    private func acquireExtractorSlot() async {
+        let previous = extractorChainTask
+        let mySlot = Task { @MainActor in
+            await previous?.value  // espera al turno anterior
+            let elapsed = Date().timeIntervalSince(self.lastExtractorCallAt)
+            if elapsed < self.extractorMinGap {
+                let wait = self.extractorMinGap - elapsed
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+            self.lastExtractorCallAt = Date()
+        }
+        extractorChainTask = mySlot
+        await mySlot.value
+    }
     /// BETA v1.2.12: SIN gap entre inicios. Con 4 concurrent + Innertube +
     /// googlevideo signed URLs, no hay razón para introducir latencia artificial.
     private var lastDownloadStartAt: Date = .distantPast
@@ -158,11 +173,11 @@ final class DownloadManager: NSObject, ObservableObject {
 
             // 3. Extractor local (si está healthy)
             if extractorAvailable {
-                let elapsed = Date().timeIntervalSince(self.lastExtractorCallAt)
-                if elapsed < self.extractorMinGap {
-                    try? await Task.sleep(nanoseconds: UInt64((self.extractorMinGap - elapsed) * 1_000_000_000))
-                }
-                self.lastExtractorCallAt = Date()
+                // BETA v1.2.13: SERIALIZACIÓN REAL del rate limit.
+                // Antes: 4 tasks entraban al check simultáneos, todos veían "ya toca",
+                // todos disparaban a la vez → burst de 4 requests → YouTube soft rate limit.
+                // Ahora: cada task espera su turno hasta que la anterior HAYA disparado.
+                await self.acquireExtractorSlot()
                 do {
                     let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
                     health.reportSuccess(.extractor)
