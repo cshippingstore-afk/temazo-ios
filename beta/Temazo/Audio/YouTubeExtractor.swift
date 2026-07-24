@@ -173,34 +173,65 @@ final class YouTubeExtractor: NSObject {
 
     // MARK: - Private
 
+    /// BETA v1.2.8 — Innertube API con cliente ANDROID_VR.
+    ///
+    /// Approach viejo (fetch HTML de youtube.com/watch) FALLABA porque:
+    ///   - Desde EU YouTube redirige a página de consent → 302 con 0 bytes → siempre fail
+    ///   - Requiere parsear regex JSON del HTML (frágil, se rompe cuando YT cambia formato)
+    ///   - Videos con signatureCipher → URLs cifradas que necesitan JS reverso
+    ///
+    /// Approach nuevo (POST a /youtubei/v1/player):
+    ///   - API oficial YouTube expone, la que yt-dlp usa por debajo
+    ///   - Cliente ANDROID_VR devuelve URLs DIRECTAS (sin signatureCipher, NUNCA)
+    ///   - JSON response bien estructurado, no HTML parsing
+    ///   - URL firmada para IP del cliente que POSTea (iPhone) → sin throttle
+    ///   - No dispara consent redirect (es API, no web)
     private func doExtract(videoID: String) async throws -> URL {
-        // 1. Fetch página watch via URLSession (rápido, hereda cookies de URLSession)
-        var comps = URLComponents(string: "https://www.youtube.com/watch")!
-        comps.queryItems = [
-            URLQueryItem(name: "v", value: videoID),
-            URLQueryItem(name: "bpctr", value: "9999999999"),
-            URLQueryItem(name: "has_verified", value: "1"),
-        ]
-        var req = URLRequest(url: comps.url!)
-        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        let url = URL(string: "https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
                      forHTTPHeaderField: "User-Agent")
-        req.setValue("es-ES,es;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
-        req.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        req.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
+
+        // Payload EXACTO del cliente ANDROID_VR (Quest 3) — devuelve URLs directas sin cipher
+        let payload: [String: Any] = [
+            "context": [
+                "client": [
+                    "clientName": "ANDROID_VR",
+                    "clientVersion": "1.60.19",
+                    "deviceMake": "Oculus",
+                    "deviceModel": "Quest 3",
+                    "androidSdkVersion": 32,
+                    "userAgent": "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+                    "osName": "Android",
+                    "osVersion": "12L",
+                    "hl": "en",
+                    "gl": "US",
+                    "utcOffsetMinutes": 0
+                ]
+            ],
+            "videoId": videoID
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw ExtractorError.fetchFailed(0) }
         guard (200..<300).contains(http.statusCode) else { throw ExtractorError.fetchFailed(http.statusCode) }
-        guard let html = String(data: data, encoding: .utf8) else { throw ExtractorError.noPlayerResponse }
 
-        // 2. Extract ytInitialPlayerResponse JSON
-        guard let json = extractPlayerResponseJSON(from: html) else {
-            throw ExtractorError.noPlayerResponse
-        }
-        guard let parsed = try JSONSerialization.jsonObject(with: json) as? [String: Any] else {
+        guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ExtractorError.noPlayerResponse
         }
 
-        // 3. Find best audio URL
+        // Chequeo playabilityStatus — algunos videos son private/deleted
+        if let ps = parsed["playabilityStatus"] as? [String: Any],
+           let status = ps["status"] as? String, status != "OK" {
+            let reason = (ps["reason"] as? String) ?? status
+            print("[YTExtractor] \(videoID) playability=\(status) reason=\(reason)")
+            throw ExtractorError.noStreams
+        }
+
         guard let streamingData = parsed["streamingData"] as? [String: Any] else {
             throw ExtractorError.noStreams
         }
@@ -209,21 +240,24 @@ final class YouTubeExtractor: NSObject {
         if let f = streamingData["formats"] as? [[String: Any]] { formats.append(contentsOf: f) }
         if formats.isEmpty { throw ExtractorError.noStreams }
 
-        // Audio-only primero
+        // Audio-only, mejor bitrate primero. Preferir itag 140 (m4a AAC 128kbps) sobre
+        // 251 (opus 130kbps) porque AVPlayer no toca opus nativo.
         var audios = formats.filter {
-            ($0["mimeType"] as? String)?.hasPrefix("audio/") ?? false
+            let mime = ($0["mimeType"] as? String) ?? ""
+            return mime.hasPrefix("audio/mp4") || mime.hasPrefix("audio/mpeg")
         }
-        if audios.isEmpty { audios = formats }  // fallback
-        audios.sort {
-            ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0)
+        if audios.isEmpty {
+            audios = formats.filter { ($0["mimeType"] as? String)?.hasPrefix("audio/") ?? false }
         }
+        if audios.isEmpty { audios = formats }  // último recurso
+        audios.sort { ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0) }
 
         for f in audios {
             if let urlStr = f["url"] as? String, let url = URL(string: urlStr) {
                 return url
             }
-            // Si tiene signatureCipher → no implementado, probar el siguiente
         }
+        // ANDROID_VR raramente devuelve signatureCipher, pero por si acaso
         throw ExtractorError.signatureCipher
     }
 
