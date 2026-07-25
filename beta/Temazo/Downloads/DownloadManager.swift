@@ -45,35 +45,12 @@ final class DownloadManager: NSObject, ObservableObject {
     private var pendingMeta: [Int: (track: Track, ytId: String)] = [:]  // taskIdentifier → meta
     /// BETA v1.2: cache Track por ytId — sobrevive a failures, permite retry.
     private var trackCache: [String: Track] = [:]
-    /// BETA v1.2.14: rate limit serial, 1s entre calls = 60 req/min.
-    /// Con maxConcurrent=6 y extractor a 60/min, el extractor sigue siendo
-    /// el rate limiter (6 downloads terminan antes que el próximo extract),
-    /// pero muy por debajo del techo real Innertube (>1000 req/min).
-    private var lastExtractorCallAt: Date = .distantPast
-    private let extractorMinGap: TimeInterval = 1.0
-    /// Task cadena serializada — cada llamada espera a la anterior.
-    private var extractorChainTask: Task<Void, Never>? = nil
-
-    /// BETA v1.2.13: adquiere un "turno" para llamar al extractor.
-    /// Se serializa via chain de Tasks — imposible burst por concurrencia.
-    private func acquireExtractorSlot() async {
-        let previous = extractorChainTask
-        let mySlot = Task { @MainActor in
-            await previous?.value  // espera al turno anterior
-            let elapsed = Date().timeIntervalSince(self.lastExtractorCallAt)
-            if elapsed < self.extractorMinGap {
-                let wait = self.extractorMinGap - elapsed
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-            }
-            self.lastExtractorCallAt = Date()
-        }
-        extractorChainTask = mySlot
-        await mySlot.value
-    }
-    /// BETA v1.2.12: SIN gap entre inicios. Con 4 concurrent + Innertube +
-    /// googlevideo signed URLs, no hay razón para introducir latencia artificial.
+    /// BETA v1.2.17: contador de retries por track para backoff exponencial.
+    private var retryCount: [String: Int] = [:]
+    /// BETA v1.2.17: rate limit del extractor MOVIDO a YouTubeExtractor global.
+    /// Aquí solo controlamos gap entre INICIOS de download (spread bandwidth).
     private var lastDownloadStartAt: Date = .distantPast
-    private let downloadMinGap: TimeInterval = 0.0
+    private let downloadMinGap: TimeInterval = 0.5
 
     private let netMonitor = NWPathMonitor()
     @Published private(set) var isOnWifi: Bool = false
@@ -145,9 +122,9 @@ final class DownloadManager: NSObject, ObservableObject {
     ///   - Total: 12 requests/min máximo (memoria dice ≤6w+3s = safe, esto es más conservador)
     ///
     /// Fallback si extractor falla (raro): proxy VPS (throttled pero funciona)
-    /// BETA v1.2.16 — RELENTLESS. Sin circuit breaker que corte al usuario.
-    /// Siempre intenta: cache extractor → extractor live → proxy VPS.
-    /// Si algo falla, lo re-encola con backoff exponencial en vez de darlo por perdido.
+    /// BETA v1.2.17 — SIMPLIFICADO.
+    /// El rate limit está a nivel de YouTubeExtractor global (compartido con Player).
+    /// Aquí solo pedimos URL y descargamos. Sin circuit breaker, sin duplicar rate limits.
     func downloadTrackAutoResolve(_ track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
         trackCache[ytId] = track
@@ -157,28 +134,25 @@ final class DownloadManager: NSObject, ObservableObject {
         }
         states[ytId] = .queued
         Task { @MainActor in
-            // 1. Cache hit del extractor — instantáneo
-            if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
-                self.downloadTrack(track, resolvedURL: cached)
-                return
-            }
-            // 2. Extractor local con serialización (sin race condition)
-            await self.acquireExtractorSlot()
+            // 1. Extractor (con rate limit interno global)
             do {
-                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
+                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 12)
                 self.downloadTrack(track, resolvedURL: url)
                 return
             } catch {
                 print("[DL] \(ytId) extractor fail → proxy: \(error.localizedDescription)")
             }
-            // 3. Fallback proxy VPS
+            // 2. Fallback proxy VPS
             if let proxyURL = self.buildProxyURL(ytId: ytId) {
                 self.downloadTrack(track, resolvedURL: proxyURL)
                 return
             }
-            // 4. Sin opciones — reagendar con backoff (no perder el track)
-            self.states[ytId] = .failed("temporal, reintenta pronto")
-            self.scheduleTrackRetry(track, seconds: 30)
+            // 3. Sin opciones — reagendar con backoff exponencial (nunca perder)
+            self.states[ytId] = .failed("reintentando…")
+            let attempt = (self.retryCount[ytId] ?? 0) + 1
+            self.retryCount[ytId] = attempt
+            let backoff: TimeInterval = min(pow(2.0, Double(attempt)) * 15, 600)  // 30s, 60, 120, ..., max 10min
+            self.scheduleTrackRetry(track, seconds: backoff)
         }
     }
 
@@ -418,40 +392,29 @@ extension DownloadManager: URLSessionDownloadDelegate {
             // Limpiar el file basura del temp path
             try? FileManager.default.removeItem(at: location)
         }
-        // BETA v1.2.11: NO reportamos éxito/fallo al circuit breaker del EXTRACTOR
-        // basándonos en el download final. El extractor YA hizo su trabajo dando la URL.
-        // Los fails del download (timeout, expired URL, googlevideo throttle) NO son
-        // culpa del extractor. Sólo reportamos al circuit breaker PROXY porque si el
-        // download vía temazo.es falla, sí es culpa del proxy.
-        let usedProxy = downloadTask.originalRequest?.url?.host?.contains("temazo.es") == true
+        // BETA v1.2.17: fail → schedule retry con backoff. Success → registrar.
+        // NO enviamos toasts al user por fallos individuales.
         let localErrorMsg = errorMsg
         let localSavedSize = savedSize
         let localSavedTo = savedTo
+        let localTrack = meta.track
+        let localYtId = meta.ytId
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             self.pendingMeta.removeValue(forKey: taskId)
-            self.activeTasks.removeValue(forKey: meta.ytId)
+            self.activeTasks.removeValue(forKey: localYtId)
             if let err = localErrorMsg {
-                self.states[meta.ytId] = .failed(err)
-                if usedProxy {
-                    let opened = ServiceHealth.shared.reportFailure(.proxy, error: err)
-                    if opened {
-                        NotificationCenter.default.post(
-                            name: .temazoShowToast, object: nil,
-                            userInfo: ["text": "⚠️ Proxy VPS limitado — reintento en 5min"])
-                    }
-                }
-                // Si usedProxy=false (googlevideo directo), NO tocamos ServiceHealth.
-                // El extractor funcionó correctamente. El fallo es del download.
+                self.states[localYtId] = .failed(err)
+                // Retry con backoff (relentless — nunca se pierde una canción)
+                let attempt = (self.retryCount[localYtId] ?? 0) + 1
+                self.retryCount[localYtId] = attempt
+                let backoff: TimeInterval = min(pow(2.0, Double(attempt)) * 15, 600)
+                self.scheduleTrackRetry(localTrack, seconds: backoff)
             } else if localSavedTo != nil {
-                OfflineLibrary.shared.registerDownload(youtubeId: meta.ytId, track: meta.track, sizeBytes: localSavedSize)
-                self.states[meta.ytId] = .completed
-                if usedProxy {
-                    ServiceHealth.shared.reportSuccess(.proxy)
-                }
-                // BETA v1.2.11: éxito de download desde googlevideo = confirma extractor OK
-                ServiceHealth.shared.reportSuccess(.extractor)
-                print("[DL] DONE \(meta.ytId) size=\(localSavedSize) via=\(usedProxy ? "proxy" : "extractor")")
+                OfflineLibrary.shared.registerDownload(youtubeId: localYtId, track: localTrack, sizeBytes: localSavedSize)
+                self.states[localYtId] = .completed
+                self.retryCount.removeValue(forKey: localYtId)  // reset contador al éxito
+                print("[DL] DONE \(localYtId) size=\(localSavedSize)")
             }
             self.maybeStartQueued()
         }
@@ -461,20 +424,18 @@ extension DownloadManager: URLSessionDownloadDelegate {
                                 didCompleteWithError error: Error?) {
         guard let error = error else { return }
         let taskId = task.taskIdentifier
-        // BETA v1.2.11: mismo criterio — solo culpar al PROXY si el fallo viene del proxy
-        let usedProxy = task.originalRequest?.url?.host?.contains("temazo.es") == true
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             if let meta = self.pendingMeta[taskId] {
                 self.states[meta.ytId] = .failed(error.localizedDescription)
                 self.pendingMeta.removeValue(forKey: taskId)
                 self.activeTasks.removeValue(forKey: meta.ytId)
-                // BETA v1.2.11: solo culpar al proxy si fue vía proxy.
-                // Download fail vía googlevideo (extractor URL) NO es culpa del extractor.
-                if usedProxy {
-                    ServiceHealth.shared.reportFailure(.proxy, error: error.localizedDescription)
-                }
-                print("[DL] FAILED \(meta.ytId): \(error.localizedDescription) via=\(usedProxy ? "proxy" : "googlevideo")")
+                // BETA v1.2.17: retry con backoff en vez de dejar como .failed permanente
+                let attempt = (self.retryCount[meta.ytId] ?? 0) + 1
+                self.retryCount[meta.ytId] = attempt
+                let backoff: TimeInterval = min(pow(2.0, Double(attempt)) * 15, 600)
+                print("[DL] FAILED \(meta.ytId) attempt=\(attempt) retry in \(Int(backoff))s: \(error.localizedDescription)")
+                self.scheduleTrackRetry(meta.track, seconds: backoff)
                 self.maybeStartQueued()
             }
         }

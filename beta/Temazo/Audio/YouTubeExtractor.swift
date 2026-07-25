@@ -55,12 +55,21 @@ final class YouTubeExtractor: NSObject {
         }
     }
 
+    // BETA v1.2.17: RATE LIMIT GLOBAL SERIALIZADO
+    // Ambos Player (streaming) y DownloadManager (bulk) usan este mismo lock.
+    // Imposible burst por más threads que llamen simultáneamente.
+    private var lastCallAt: Date = .distantPast
+    private let minGap: TimeInterval = 2.0  // 2s entre calls Innertube
+    private var extractorChain: Task<Void, Never>? = nil
+
     override init() {
-        let cfg = URLSessionConfiguration.ephemeral   // sesión limpia sin cookies persistidas
-        cfg.timeoutIntervalForRequest = 10
-        cfg.httpMaximumConnectionsPerHost = 6
-        cfg.httpCookieAcceptPolicy = .never           // BETA v1.2.9: cookies OFF — Innertube API no las quiere
-        cfg.httpShouldSetCookies = false
+        // BETA v1.2.17: sesión persistente con cookies — YouTube trata mejor sesiones
+        // con historial. Ephemeral (sin cookies) daba HTTP 400 aleatorio.
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 15
+        cfg.httpMaximumConnectionsPerHost = 4
+        cfg.httpCookieAcceptPolicy = .always
+        cfg.httpShouldSetCookies = true
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         cfg.urlCache = nil
         self.session = URLSession(configuration: cfg)
@@ -81,10 +90,20 @@ final class YouTubeExtractor: NSObject {
     }
 
     func extractStreamURL(videoID: String, timeoutSec: TimeInterval = 6) async throws -> URL {
+        // 1. Cache hit — retorno instantáneo, no cuenta como request
         if let c = cachedURL(for: videoID) {
             print("[YTExtractor] cache hit \(videoID)")
             return c
         }
+        // 2. BETA v1.2.17: Serialización global + rate limit.
+        //    Todos los callers (Player, DownloadManager, prefetch) pasan por aquí.
+        //    Imposible burst de N requests simultáneos.
+        await acquireGlobalSlot()
+
+        // Segunda comprobación de cache — puede que otro caller extrajera mientras
+        // esperábamos en el slot.
+        if let c = cachedURL(for: videoID) { return c }
+
         let started = Date()
         let url = try await withThrowingTaskGroup(of: URL.self) { group in
             group.addTask { try await self.doExtract(videoID: videoID) }
@@ -101,6 +120,23 @@ final class YouTubeExtractor: NSObject {
         cache[videoID] = CacheEntry(urlString: url.absoluteString, timestamp: Date())
         schedulePersist()
         return url
+    }
+
+    /// BETA v1.2.17: cada llamada espera a la anterior + respeta minGap.
+    /// Chain de Tasks encadenados — imposible salto de orden.
+    private func acquireGlobalSlot() async {
+        let previous = extractorChain
+        let mySlot = Task { @MainActor in
+            await previous?.value
+            let elapsed = Date().timeIntervalSince(self.lastCallAt)
+            if elapsed < self.minGap {
+                let wait = self.minGap - elapsed
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+            self.lastCallAt = Date()
+        }
+        extractorChain = mySlot
+        await mySlot.value
     }
 
     /// Pre-resuelve URLs en background (fire-and-forget).
