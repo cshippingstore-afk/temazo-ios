@@ -145,7 +145,9 @@ final class DownloadManager: NSObject, ObservableObject {
     ///   - Total: 12 requests/min máximo (memoria dice ≤6w+3s = safe, esto es más conservador)
     ///
     /// Fallback si extractor falla (raro): proxy VPS (throttled pero funciona)
-    /// BETA v1.2.7: circuit breaker per source. Salta el que esté degraded.
+    /// BETA v1.2.16 — RELENTLESS. Sin circuit breaker que corte al usuario.
+    /// Siempre intenta: cache extractor → extractor live → proxy VPS.
+    /// Si algo falla, lo re-encola con backoff exponencial en vez de darlo por perdido.
     func downloadTrackAutoResolve(_ track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else { return }
         trackCache[ytId] = track
@@ -155,56 +157,42 @@ final class DownloadManager: NSObject, ObservableObject {
         }
         states[ytId] = .queued
         Task { @MainActor in
-            // 1. Cache hit del extractor (siempre válido, no cuenta como request)
+            // 1. Cache hit del extractor — instantáneo
             if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
                 self.downloadTrack(track, resolvedURL: cached)
                 return
             }
-
-            let health = ServiceHealth.shared
-            let extractorAvailable = health.isAvailable(.extractor)
-            let proxyAvailable = health.isAvailable(.proxy)
-
-            // 2. Si ambos servicios están degraded, marca failed y espera cooldown
-            if !extractorAvailable && !proxyAvailable {
-                self.states[ytId] = .failed("servicio bloqueado — reintenta en 5min")
-                self.maybeStartQueued()
+            // 2. Extractor local con serialización (sin race condition)
+            await self.acquireExtractorSlot()
+            do {
+                let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
+                self.downloadTrack(track, resolvedURL: url)
                 return
+            } catch {
+                print("[DL] \(ytId) extractor fail → proxy: \(error.localizedDescription)")
             }
-
-            // 3. Extractor local (si está healthy)
-            if extractorAvailable {
-                // BETA v1.2.13: SERIALIZACIÓN REAL del rate limit.
-                // Antes: 4 tasks entraban al check simultáneos, todos veían "ya toca",
-                // todos disparaban a la vez → burst de 4 requests → YouTube soft rate limit.
-                // Ahora: cada task espera su turno hasta que la anterior HAYA disparado.
-                await self.acquireExtractorSlot()
-                do {
-                    let url = try await YouTubeExtractor.shared.extractStreamURL(videoID: ytId, timeoutSec: 10)
-                    health.reportSuccess(.extractor)
-                    self.downloadTrack(track, resolvedURL: url)
-                    return
-                } catch {
-                    let opened = health.reportFailure(.extractor, error: error.localizedDescription)
-                    print("[DL] \(ytId) extractor fail: \(error.localizedDescription)\(opened ? " (CIRCUIT OPENED)" : "")")
-                    if opened {
-                        NotificationCenter.default.post(
-                            name: .temazoShowToast, object: nil,
-                            userInfo: ["text": "⚠️ YouTube limitando — reintento en 5min"])
-                    }
-                    // cae al proxy
-                }
-            }
-
-            // 4. Proxy VPS (si está healthy)
-            if proxyAvailable, let proxyURL = self.buildProxyURL(ytId: ytId) {
+            // 3. Fallback proxy VPS
+            if let proxyURL = self.buildProxyURL(ytId: ytId) {
                 self.downloadTrack(track, resolvedURL: proxyURL)
                 return
             }
+            // 4. Sin opciones — reagendar con backoff (no perder el track)
+            self.states[ytId] = .failed("temporal, reintenta pronto")
+            self.scheduleTrackRetry(track, seconds: 30)
+        }
+    }
 
-            // 5. Sin opciones
-            self.states[ytId] = .failed("todos los servicios bloqueados")
-            self.maybeStartQueued()
+    /// BETA v1.2.16 — retry con backoff que NUNCA da por perdida una canción.
+    private func scheduleTrackRetry(_ track: Track, seconds: TimeInterval) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self = self else { return }
+            guard let ytId = track.youtubeId else { return }
+            // Solo reintentar si sigue en .failed (podría estar completed / downloading ya)
+            if case .failed = self.states[ytId] {
+                print("[DL] retry \(ytId) tras \(Int(seconds))s")
+                self.downloadTrackAutoResolve(track)
+            }
         }
     }
 

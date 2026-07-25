@@ -37,6 +37,9 @@ final class OfflineOrchestrator: ObservableObject {
         DownloadManager.shared.clearFailedStates()
         // BETA v1.2.10: purgar descargas con formato incorrecto (webm/HTML disfrazados)
         OfflineLibrary.shared.purgeCorrupted()
+        // BETA v1.2.16: RESET total del circuit breaker al arrancar la app.
+        // No arrastramos estado degraded de sesión anterior — user siempre empieza limpio.
+        ServiceHealth.shared.resetAll()
         // BETA v1.2.15: reset ServiceHealth al arrancar — evitar arrastrar degraded state viejo
         ServiceHealth.shared.resetAll()
 

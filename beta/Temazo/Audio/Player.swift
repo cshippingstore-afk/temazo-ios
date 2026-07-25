@@ -218,50 +218,36 @@ final class Player: NSObject, ObservableObject {
             return
         }
 
-        // BETA v1.2.7: circuit breaker — skip services degraded para no bloquear al user
+        // BETA v1.2.16: PLAYER NUNCA BLOQUEADO por circuit breaker.
+        // El breaker es SOLO para downloads bulk, no para plays iniciados por el user.
+        // Si el user toca una canción, SIEMPRE intentamos reproducir: extractor → proxy.
+        // Si ambos fallan, mensaje claro pero SIN "reintenta en 5min".
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             let stillCurrent = { self.state.currentTrack?.id == track.id }
-            let health = ServiceHealth.shared
 
-            // Paso 2: extractor local (si healthy)
-            if health.isAvailable(.extractor) {
-                do {
-                    let directURL = try await YouTubeExtractor.shared.extractStreamURL(
-                        videoID: ytId, timeoutSec: 8)
-                    if stillCurrent() {
-                        health.reportSuccess(.extractor)
-                        self.startWithURL(directURL, track: track, source: "extractor-live")
-                        TemazoAPI.shared.prefetchYouTubeURLs([ytId])
-                        return
-                    }
-                } catch {
-                    health.reportFailure(.extractor, error: error.localizedDescription)
-                    print("[Player] extractor fail: \(error.localizedDescription)")
+            // Paso 2: extractor local (SIEMPRE se intenta, sin gate)
+            do {
+                let directURL = try await YouTubeExtractor.shared.extractStreamURL(
+                    videoID: ytId, timeoutSec: 8)
+                if stillCurrent() {
+                    self.startWithURL(directURL, track: track, source: "extractor-live")
+                    TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+                    return
                 }
-            } else {
-                print("[Player] extractor DEGRADED, skipping to proxy")
+            } catch {
+                print("[Player] extractor fail: \(error.localizedDescription) → fallback proxy")
             }
 
             guard stillCurrent() else { return }
 
-            // Paso 3: proxy VPS (si healthy)
-            if health.isAvailable(.proxy) {
-                guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
-                    self.state.lastError = "no url"; self.state.loadingState = .failed
-                    return
-                }
-                self.startWithURL(proxyURL, track: track, source: "proxy-302-fallback")
-                TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+            // Paso 3: proxy VPS fallback (SIEMPRE se intenta)
+            guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
+                self.state.lastError = "no url"; self.state.loadingState = .failed
                 return
             }
-
-            // Ambos degraded — error claro al user (no rueda infinita)
-            self.state.lastError = "Servicio limitado — reintenta en 5min"
-            self.state.loadingState = .failed
-            NotificationCenter.default.post(
-                name: .temazoShowToast, object: nil,
-                userInfo: ["text": "⚠️ Servicio limitado — reintenta en 5min"])
+            self.startWithURL(proxyURL, track: track, source: "proxy-302-fallback")
+            TemazoAPI.shared.prefetchYouTubeURLs([ytId])
         }
     }
 
