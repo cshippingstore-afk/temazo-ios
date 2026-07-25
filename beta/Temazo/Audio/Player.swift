@@ -186,16 +186,17 @@ final class Player: NSObject, ObservableObject {
     private func startAVPlayback(for track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
             state.lastError = "no youtubeId"; state.loadingState = .failed
-            print("[Player] no youtubeId for track id=\(track.id)"); return
+            NSLog("TEMAZO_PLAYER no youtubeId for track id=\(track.id)"); return
         }
+        NSLog("TEMAZO_PLAYER startAVPlayback for \(ytId) title=\(track.title)")
 
         // BETA v1.0.0: PRIORIDAD MÁXIMA a archivo local descargado.
-        // Si el user descargó esta canción, la reproducimos desde disco → cero red,
-        // cero latencia extractor, funciona sin internet, calidad íntegra.
         if let localURL = OfflineLibrary.shared.localURL(for: ytId) {
+            NSLog("TEMAZO_PLAYER local file exists → play local")
             startWithURL(localURL, track: track, source: "offline-download")
             return
         }
+        NSLog("TEMAZO_PLAYER no local file, going to extractor")
 
         // BETA v1.2.6: gate offlineMode REMOVIDO. Se activaba por accidente y
         // bloqueaba streaming. Ahora siempre intentamos reproducir: local first,
@@ -253,7 +254,7 @@ final class Player: NSObject, ObservableObject {
 
     private func startWithURL(_ url: URL, track: Track, source: String) {
         teardownObservers()
-        print("[Player] streaming from \(source): \(url.absoluteString.prefix(80))…")
+        NSLog("TEMAZO_PLAYER startWithURL source=\(source) host=\(url.host ?? "?") ")
 
         // CRÍTICO: activar AudioSession ANTES de crear el AVPlayer.
         // Sin esto, en ciertos estados iOS el audio NO sale por altavoz aunque
@@ -298,9 +299,24 @@ final class Player: NSObject, ObservableObject {
                     print("[Player] readyToPlay duration=\(self.state.durationSec)s")
                 case .failed:
                     let err = item.error?.localizedDescription ?? "unknown"
+                    let nsErr = item.error as NSError?
+                    let code = nsErr?.code ?? 0
+                    let domain = nsErr?.domain ?? "?"
+                    NSLog("TEMAZO_PLAYER item FAILED: domain=\(domain) code=\(code) err=\(err) source=\(source)")
                     self.state.lastError = err
                     self.state.loadingState = .failed
-                    print("[Player] item FAILED: \(err)")
+                    // BETA v1.2.18: retry con URL FRESH si viene de extractor
+                    // (URL puede haber expirado, googlevideo rechazó por IP mismatch, etc)
+                    if source == "extractor-live" || source == "extractor-cache",
+                       let ytId = track.youtubeId {
+                        NSLog("TEMAZO_PLAYER auto-retry con URL fresh…")
+                        YouTubeExtractor.shared.invalidateCache(for: ytId)
+                        Task { @MainActor [weak self] in
+                            guard let self = self else { return }
+                            guard self.state.currentTrack?.id == track.id else { return }
+                            self.startAVPlayback(for: track)
+                        }
+                    }
                 case .unknown: break
                 @unknown default: break
                 }

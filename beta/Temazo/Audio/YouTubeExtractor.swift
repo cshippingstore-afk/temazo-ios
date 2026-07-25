@@ -89,12 +89,19 @@ final class YouTubeExtractor: NSObject {
         return URL(string: e.urlString)
     }
 
+    /// BETA v1.2.18: invalida cache de un video específico (usado tras 403 durante playback).
+    func invalidateCache(for videoID: String) {
+        cache[videoID] = nil
+        NSLog("TEMAZO_YT invalidated cache for \(videoID)")
+    }
+
     func extractStreamURL(videoID: String, timeoutSec: TimeInterval = 6) async throws -> URL {
         // 1. Cache hit — retorno instantáneo, no cuenta como request
         if let c = cachedURL(for: videoID) {
-            print("[YTExtractor] cache hit \(videoID)")
+            NSLog("TEMAZO_YT cache hit \(videoID)")
             return c
         }
+        NSLog("TEMAZO_YT extract START \(videoID)")
         // 2. BETA v1.2.17: Serialización global + rate limit.
         //    Todos los callers (Player, DownloadManager, prefetch) pasan por aquí.
         //    Imposible burst de N requests simultáneos.
@@ -116,7 +123,7 @@ final class YouTubeExtractor: NSObject {
             return result
         }
         let elapsed = Date().timeIntervalSince(started)
-        print(String(format: "[YTExtractor] %@ extracted in %.2fs", videoID, elapsed))
+        NSLog(String(format: "TEMAZO_YT extract OK %@ in %.2fs host=%@", videoID, elapsed, url.host ?? "?"))
         cache[videoID] = CacheEntry(urlString: url.absoluteString, timestamp: Date())
         schedulePersist()
         return url
