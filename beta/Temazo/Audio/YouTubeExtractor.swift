@@ -55,23 +55,12 @@ final class YouTubeExtractor: NSObject {
         }
     }
 
-    // BETA v1.2.17: RATE LIMIT GLOBAL SERIALIZADO
-    // Ambos Player (streaming) y DownloadManager (bulk) usan este mismo lock.
-    // Imposible burst por más threads que llamen simultáneamente.
-    private var lastCallAt: Date = .distantPast
-    private let minGap: TimeInterval = 2.0  // 2s entre calls Innertube
-    private var extractorChain: Task<Void, Never>? = nil
-
     override init() {
-        // BETA v1.2.17: sesión persistente con cookies — YouTube trata mejor sesiones
-        // con historial. Ephemeral (sin cookies) daba HTTP 400 aleatorio.
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 15
-        cfg.httpMaximumConnectionsPerHost = 4
+        cfg.timeoutIntervalForRequest = 8
+        cfg.httpMaximumConnectionsPerHost = 6
         cfg.httpCookieAcceptPolicy = .always
-        cfg.httpShouldSetCookies = true
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
-        cfg.urlCache = nil
         self.session = URLSession(configuration: cfg)
         super.init()
         loadPersistedCache()
@@ -89,28 +78,11 @@ final class YouTubeExtractor: NSObject {
         return URL(string: e.urlString)
     }
 
-    /// BETA v1.2.18: invalida cache de un video específico (usado tras 403 durante playback).
-    func invalidateCache(for videoID: String) {
-        cache[videoID] = nil
-        NSLog("TEMAZO_YT invalidated cache for \(videoID)")
-    }
-
     func extractStreamURL(videoID: String, timeoutSec: TimeInterval = 6) async throws -> URL {
-        // 1. Cache hit — retorno instantáneo, no cuenta como request
         if let c = cachedURL(for: videoID) {
-            NSLog("TEMAZO_YT cache hit \(videoID)")
+            print("[YTExtractor] cache hit \(videoID)")
             return c
         }
-        NSLog("TEMAZO_YT extract START \(videoID)")
-        // 2. BETA v1.2.17: Serialización global + rate limit.
-        //    Todos los callers (Player, DownloadManager, prefetch) pasan por aquí.
-        //    Imposible burst de N requests simultáneos.
-        await acquireGlobalSlot()
-
-        // Segunda comprobación de cache — puede que otro caller extrajera mientras
-        // esperábamos en el slot.
-        if let c = cachedURL(for: videoID) { return c }
-
         let started = Date()
         let url = try await withThrowingTaskGroup(of: URL.self) { group in
             group.addTask { try await self.doExtract(videoID: videoID) }
@@ -123,27 +95,10 @@ final class YouTubeExtractor: NSObject {
             return result
         }
         let elapsed = Date().timeIntervalSince(started)
-        NSLog(String(format: "TEMAZO_YT extract OK %@ in %.2fs host=%@", videoID, elapsed, url.host ?? "?"))
+        print(String(format: "[YTExtractor] %@ extracted in %.2fs", videoID, elapsed))
         cache[videoID] = CacheEntry(urlString: url.absoluteString, timestamp: Date())
         schedulePersist()
         return url
-    }
-
-    /// BETA v1.2.17: cada llamada espera a la anterior + respeta minGap.
-    /// Chain de Tasks encadenados — imposible salto de orden.
-    private func acquireGlobalSlot() async {
-        let previous = extractorChain
-        let mySlot = Task { @MainActor in
-            await previous?.value
-            let elapsed = Date().timeIntervalSince(self.lastCallAt)
-            if elapsed < self.minGap {
-                let wait = self.minGap - elapsed
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-            }
-            self.lastCallAt = Date()
-        }
-        extractorChain = mySlot
-        await mySlot.value
     }
 
     /// Pre-resuelve URLs en background (fire-and-forget).
@@ -218,79 +173,35 @@ final class YouTubeExtractor: NSObject {
 
     // MARK: - Private
 
-    /// BETA v1.2.8 — Innertube API con cliente ANDROID_VR.
-    ///
-    /// Approach viejo (fetch HTML de youtube.com/watch) FALLABA porque:
-    ///   - Desde EU YouTube redirige a página de consent → 302 con 0 bytes → siempre fail
-    ///   - Requiere parsear regex JSON del HTML (frágil, se rompe cuando YT cambia formato)
-    ///   - Videos con signatureCipher → URLs cifradas que necesitan JS reverso
-    ///
-    /// Approach nuevo (POST a /youtubei/v1/player):
-    ///   - API oficial YouTube expone, la que yt-dlp usa por debajo
-    ///   - Cliente ANDROID_VR devuelve URLs DIRECTAS (sin signatureCipher, NUNCA)
-    ///   - JSON response bien estructurado, no HTML parsing
-    ///   - URL firmada para IP del cliente que POSTea (iPhone) → sin throttle
-    ///   - No dispara consent redirect (es API, no web)
-    /// BETA v1.2.9: SOLO ANDROID_VR — testado y confirmado como el único
-    /// que la Innertube API acepta con la key pública AIzaSyA8eiZmM1... sin auth.
-    /// (IOS/ANDROID clients devuelven 400 "failedPrecondition" — necesitan visitorData).
-    /// Sesión ephemeral sin cookies — evita conflicto con cookies de youtube.com.
     private func doExtract(videoID: String) async throws -> URL {
-        let url = URL(string: "https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-                     forHTTPHeaderField: "User-Agent")
-        // NO Accept-Encoding — que URLSession lo gestione automático
-        // NO Accept-Language — Innertube API no lo necesita
-        // NO cookies — sesión ephemeral
-
-        let payload: [String: Any] = [
-            "context": [
-                "client": [
-                    "clientName": "ANDROID_VR",
-                    "clientVersion": "1.60.19",
-                    "deviceMake": "Oculus",
-                    "deviceModel": "Quest 3",
-                    "androidSdkVersion": 32,
-                    "userAgent": "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-                    "osName": "Android",
-                    "osVersion": "12L",
-                    "hl": "en", "gl": "US", "utcOffsetMinutes": 0
-                ]
-            ],
-            "videoId": videoID
+        // 1. Fetch página watch via URLSession (rápido, hereda cookies de URLSession)
+        var comps = URLComponents(string: "https://www.youtube.com/watch")!
+        comps.queryItems = [
+            URLQueryItem(name: "v", value: videoID),
+            URLQueryItem(name: "bpctr", value: "9999999999"),
+            URLQueryItem(name: "has_verified", value: "1"),
         ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        var req = URLRequest(url: comps.url!)
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                     forHTTPHeaderField: "User-Agent")
+        req.setValue("es-ES,es;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        req.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
 
         let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else {
-            print("[YTExtractor] \(videoID) no HTTP response")
-            throw ExtractorError.fetchFailed(0)
-        }
-        // BETA v1.2.9: log DETALLADO en fallo — sabemos exactamente qué devuelve YT
-        if !(200..<300).contains(http.statusCode) {
-            let bodyStr = String(data: data.prefix(300), encoding: .utf8) ?? "<binary>"
-            print("[YTExtractor] \(videoID) HTTP \(http.statusCode) body=\(bodyStr)")
-            throw ExtractorError.fetchFailed(http.statusCode)
-        }
+        guard let http = resp as? HTTPURLResponse else { throw ExtractorError.fetchFailed(0) }
+        guard (200..<300).contains(http.statusCode) else { throw ExtractorError.fetchFailed(http.statusCode) }
+        guard let html = String(data: data, encoding: .utf8) else { throw ExtractorError.noPlayerResponse }
 
-        guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            let bodyStr = String(data: data.prefix(300), encoding: .utf8) ?? "<binary>"
-            print("[YTExtractor] \(videoID) not JSON: \(bodyStr)")
+        // 2. Extract ytInitialPlayerResponse JSON
+        guard let json = extractPlayerResponseJSON(from: html) else {
+            throw ExtractorError.noPlayerResponse
+        }
+        guard let parsed = try JSONSerialization.jsonObject(with: json) as? [String: Any] else {
             throw ExtractorError.noPlayerResponse
         }
 
-        if let ps = parsed["playabilityStatus"] as? [String: Any],
-           let status = ps["status"] as? String, status != "OK" {
-            let reason = (ps["reason"] as? String) ?? status
-            print("[YTExtractor] \(videoID) playability=\(status) reason=\(reason)")
-            throw ExtractorError.noStreams
-        }
-
+        // 3. Find best audio URL
         guard let streamingData = parsed["streamingData"] as? [String: Any] else {
-            print("[YTExtractor] \(videoID) no streamingData in response")
             throw ExtractorError.noStreams
         }
         var formats: [[String: Any]] = []
@@ -298,20 +209,20 @@ final class YouTubeExtractor: NSObject {
         if let f = streamingData["formats"] as? [[String: Any]] { formats.append(contentsOf: f) }
         if formats.isEmpty { throw ExtractorError.noStreams }
 
-        // Preferir audio/mp4 (itag 140 AAC 128kbps) que AVPlayer toca nativo.
-        // Ignorar audio/webm opus (251) — AVPlayer no toca opus.
+        // Audio-only primero
         var audios = formats.filter {
-            let mime = ($0["mimeType"] as? String) ?? ""
-            return mime.hasPrefix("audio/mp4") || mime.hasPrefix("audio/mpeg")
+            ($0["mimeType"] as? String)?.hasPrefix("audio/") ?? false
         }
-        if audios.isEmpty { audios = formats.filter { ($0["mimeType"] as? String)?.hasPrefix("audio/") ?? false } }
-        if audios.isEmpty { audios = formats }
-        audios.sort { ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0) }
+        if audios.isEmpty { audios = formats }  // fallback
+        audios.sort {
+            ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0)
+        }
 
         for f in audios {
             if let urlStr = f["url"] as? String, let url = URL(string: urlStr) {
                 return url
             }
+            // Si tiene signatureCipher → no implementado, probar el siguiente
         }
         throw ExtractorError.signatureCipher
     }

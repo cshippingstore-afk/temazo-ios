@@ -186,21 +186,17 @@ final class Player: NSObject, ObservableObject {
     private func startAVPlayback(for track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
             state.lastError = "no youtubeId"; state.loadingState = .failed
-            NSLog("TEMAZO_PLAYER no youtubeId for track id=\(track.id)"); return
+            print("[Player] no youtubeId for track id=\(track.id)"); return
         }
-        NSLog("TEMAZO_PLAYER startAVPlayback for \(ytId) title=\(track.title)")
 
-        // BETA v1.0.0: PRIORIDAD MÁXIMA a archivo local descargado.
+        // BETA v1.2.19: PRIORIDAD MÁXIMA archivo local descargado.
+        // ÚNICO cambio respecto al Player de la estable.
+        // Si el user descargó esta canción, la reproducimos desde disco.
         if let localURL = OfflineLibrary.shared.localURL(for: ytId) {
-            NSLog("TEMAZO_PLAYER local file exists → play local")
+            print("[Player] offline hit \(ytId)")
             startWithURL(localURL, track: track, source: "offline-download")
             return
         }
-        NSLog("TEMAZO_PLAYER no local file, going to extractor")
-
-        // BETA v1.2.6: gate offlineMode REMOVIDO. Se activaba por accidente y
-        // bloqueaba streaming. Ahora siempre intentamos reproducir: local first,
-        // extractor después. El toggle en Ajustes también se eliminó.
 
         // Estrategia v2.26 (vuelta a AVPlayer tras experimento WKWebView fallido):
         // PRIORIDAD ABSOLUTA al extractor local — extrae la URL desde el iPhone del
@@ -219,30 +215,21 @@ final class Player: NSObject, ObservableObject {
             return
         }
 
-        // BETA v1.2.16: PLAYER NUNCA BLOQUEADO por circuit breaker.
-        // El breaker es SOLO para downloads bulk, no para plays iniciados por el user.
-        // Si el user toca una canción, SIEMPRE intentamos reproducir: extractor → proxy.
-        // Si ambos fallan, mensaje claro pero SIN "reintenta en 5min".
+        // Paso 2 + 3: extractor live primero, proxy como fallback
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             let stillCurrent = { self.state.currentTrack?.id == track.id }
 
-            // Paso 2: extractor local (SIEMPRE se intenta, sin gate)
-            do {
-                let directURL = try await YouTubeExtractor.shared.extractStreamURL(
-                    videoID: ytId, timeoutSec: 8)
-                if stillCurrent() {
-                    self.startWithURL(directURL, track: track, source: "extractor-live")
-                    TemazoAPI.shared.prefetchYouTubeURLs([ytId])
-                    return
-                }
-            } catch {
-                print("[Player] extractor fail: \(error.localizedDescription) → fallback proxy")
+            if let directURL = try? await YouTubeExtractor.shared.extractStreamURL(
+                videoID: ytId, timeoutSec: 8
+            ), stillCurrent() {
+                self.startWithURL(directURL, track: track, source: "extractor-live")
+                TemazoAPI.shared.prefetchYouTubeURLs([ytId])
+                return
             }
 
+            // Fallback: proxy 302 (throttled pero funciona)
             guard stillCurrent() else { return }
-
-            // Paso 3: proxy VPS fallback (SIEMPRE se intenta)
             guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
                 self.state.lastError = "no url"; self.state.loadingState = .failed
                 return
@@ -254,7 +241,7 @@ final class Player: NSObject, ObservableObject {
 
     private func startWithURL(_ url: URL, track: Track, source: String) {
         teardownObservers()
-        NSLog("TEMAZO_PLAYER startWithURL source=\(source) host=\(url.host ?? "?") ")
+        print("[Player] streaming from \(source): \(url.absoluteString.prefix(80))…")
 
         // CRÍTICO: activar AudioSession ANTES de crear el AVPlayer.
         // Sin esto, en ciertos estados iOS el audio NO sale por altavoz aunque
@@ -299,24 +286,9 @@ final class Player: NSObject, ObservableObject {
                     print("[Player] readyToPlay duration=\(self.state.durationSec)s")
                 case .failed:
                     let err = item.error?.localizedDescription ?? "unknown"
-                    let nsErr = item.error as NSError?
-                    let code = nsErr?.code ?? 0
-                    let domain = nsErr?.domain ?? "?"
-                    NSLog("TEMAZO_PLAYER item FAILED: domain=\(domain) code=\(code) err=\(err) source=\(source)")
                     self.state.lastError = err
                     self.state.loadingState = .failed
-                    // BETA v1.2.18: retry con URL FRESH si viene de extractor
-                    // (URL puede haber expirado, googlevideo rechazó por IP mismatch, etc)
-                    if source == "extractor-live" || source == "extractor-cache",
-                       let ytId = track.youtubeId {
-                        NSLog("TEMAZO_PLAYER auto-retry con URL fresh…")
-                        YouTubeExtractor.shared.invalidateCache(for: ytId)
-                        Task { @MainActor [weak self] in
-                            guard let self = self else { return }
-                            guard self.state.currentTrack?.id == track.id else { return }
-                            self.startAVPlayback(for: track)
-                        }
-                    }
+                    print("[Player] item FAILED: \(err)")
                 case .unknown: break
                 @unknown default: break
                 }
