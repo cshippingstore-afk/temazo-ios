@@ -35,15 +35,17 @@ $ids = array_values(array_unique(array_filter(array_map(fn($x) => filter_var($x,
 if (count($ids) > 10) admin_json_err(400, 'too_many', 'max 10 géneros');
 
 $db = db();
-// Verify ids existen y son visibles
+// Verify ids existen. NO exigimos is_visible=1 porque muchos artistas
+// tienen géneros históricos ya asignados que ahora están ocultos (Blues, etc).
+// Solo rechazamos si el ID no existe en absoluto en la tabla genres.
 if ($ids) {
     $ph = implode(',', array_fill(0, count($ids), '?'));
-    $valid = $db->prepare("SELECT id, name FROM genres WHERE id IN ($ph) AND is_visible=1");
+    $valid = $db->prepare("SELECT id, name FROM genres WHERE id IN ($ph)");
     $valid->execute($ids);
     $validRows = $valid->fetchAll(PDO::FETCH_KEY_PAIR);
     if (count($validRows) !== count($ids)) {
         $missing = array_diff($ids, array_keys($validRows));
-        admin_json_err(400, 'invalid_genre_ids', 'IDs no válidos: ' . implode(',', $missing));
+        admin_json_err(400, 'invalid_genre_ids', 'IDs inexistentes: ' . implode(',', $missing));
     }
     $nameList = array_values($validRows);
 } else {
