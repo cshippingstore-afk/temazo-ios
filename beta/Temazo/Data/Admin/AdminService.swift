@@ -276,8 +276,7 @@ final class AdminService: ObservableObject {
 
     // Helper para verbos custom (DELETE)
     private func sendJSON<T: Decodable>(_ method: String, _ path: String, body: [String: Any]) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: buildURL(path))
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let csrf = TemazoAPI.shared.csrfToken {
@@ -290,16 +289,24 @@ final class AdminService: ObservableObject {
 
     // MARK: - Transport helpers
 
+    /// Construye URL desde baseURL + path preservando query strings (no usar
+    /// appendingPathComponent porque encoded '?' como %3F rompiendo la URL).
+    private func buildURL(_ path: String) -> URL {
+        // path viene como "api/admin/xxx.php" o "api/admin/xxx.php?a=b&c=d"
+        let full = baseURL.absoluteString.hasSuffix("/")
+            ? baseURL.absoluteString + path
+            : baseURL.absoluteString + "/" + path
+        return URL(string: full) ?? baseURL
+    }
+
     private func getJSON<T: Decodable>(_ path: String) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: buildURL(path))
         req.httpMethod = "GET"
         return try await sendAndDecode(req)
     }
 
     private func postJSON<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: buildURL(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // CSRF si TemazoAPI ya lo tiene (los endpoints admin actuales no lo exigen,

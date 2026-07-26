@@ -11,9 +11,11 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.24'
+    MARKETING_VERSION: '1.2.25'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.25: FIX critico - appendingPathComponent encodeaba ? como %3F rompiendo
+    # todos los GET endpoints admin con query strings (audit_log, reports_queue, yt_search)
     # v1.2.24: Admin Tier 2+3 completo — merge tracks, boost, reassign album, edit genres,
     # edit bio, ban artist, force rehydrate, YT search+preview, import playlist,
     # audit log con rollback, reports queue moderation
