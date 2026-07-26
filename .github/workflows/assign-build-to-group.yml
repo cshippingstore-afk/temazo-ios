@@ -1,0 +1,130 @@
+name: Assign specific build to TestFlight group
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Marketing version to assign (ej 1.2.22)'
+        required: true
+        default: '1.2.22'
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+      TARGET_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Assign build
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, os, sys
+          key_id = os.environ['KEY_ID']
+          issuer_id = os.environ['ISSUER_ID']
+          version = os.environ['TARGET_VERSION']
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          token = jwt.encode({
+              "iss": issuer_id, "iat": int(time.time()),
+              "exp": int(time.time())+900, "aud": "appstoreconnect-v1"
+          }, key, algorithm="ES256", headers={"kid": key_id})
+          H = {"Authorization": f"Bearer {token}"}
+          BASE = "https://api.appstoreconnect.apple.com/v1"
+
+          BUNDLE = "es.temazo.app.beta"
+          # 1) app id
+          r = requests.get(f"{BASE}/apps", headers=H, params={"filter[bundleId]": BUNDLE})
+          apps = r.json().get("data", [])
+          if not apps:
+              print(f"App {BUNDLE} not found"); sys.exit(1)
+          app_id = apps[0]["id"]
+          print(f"App id: {app_id}")
+
+          # 2) grupo
+          r = requests.get(f"{BASE}/apps/{app_id}/betaGroups", headers=H)
+          groups = r.json().get("data", [])
+          if not groups:
+              print("No groups"); sys.exit(1)
+          group = groups[0]
+          gid = group["id"]
+          print(f"Grupo: {group['attributes'].get('name')} id={gid}")
+
+          # 3) buscar build por version. /builds?filter[app]=X&filter[version]=Y
+          r = requests.get(f"{BASE}/builds", headers=H,
+                           params={"filter[app]": app_id, "filter[preReleaseVersion.version]": version,
+                                   "sort": "-uploadedDate", "limit": 20})
+          data = r.json()
+          builds = data.get("data", [])
+          print(f"Found {len(builds)} builds for version {version}")
+          if not builds:
+              # Fallback: listar todos y filtrar
+              r = requests.get(f"{BASE}/builds", headers=H,
+                               params={"filter[app]": app_id, "sort": "-uploadedDate", "limit": 50,
+                                       "include": "preReleaseVersion"})
+              data = r.json()
+              print(f"Fallback: got {len(data.get('data',[]))} builds total")
+              included = {i["id"]: i for i in data.get("included", []) if i["type"]=="preReleaseVersions"}
+              for b in data.get("data", []):
+                  pv_rel = b.get("relationships",{}).get("preReleaseVersion",{}).get("data")
+                  if not pv_rel: continue
+                  pv = included.get(pv_rel["id"], {})
+                  pv_ver = pv.get("attributes",{}).get("version")
+                  if pv_ver == version:
+                      builds.append(b)
+                      print(f"  match: build {b['attributes'].get('version')} id={b['id']} pv={pv_ver}")
+
+          if not builds:
+              print(f"NO BUILD FOUND for version {version}"); sys.exit(1)
+
+          # 4) asignar cada build al grupo
+          for b in builds:
+              bid = b["id"]
+              ba = b["attributes"]
+              print(f"\nBuild {ba.get('version')} id={bid} state={ba.get('processingState')} exp={ba.get('usesNonExemptEncryption')}")
+              # Chequeo processingState — algunos endpoints requieren VALID
+              if ba.get("processingState") != "VALID":
+                  print(f"  SKIP: processingState != VALID ({ba.get('processingState')})")
+                  continue
+              # Missing export compliance? Marcar exempt
+              if ba.get("usesNonExemptEncryption") is None:
+                  print("  Setting usesNonExemptEncryption=false (export compliance)")
+                  ec = requests.patch(f"{BASE}/builds/{bid}", headers=H, json={
+                      "data": {"type": "builds", "id": bid,
+                               "attributes": {"usesNonExemptEncryption": False}}})
+                  print(f"  export compliance PATCH: {ec.status_code}")
+                  if ec.status_code >= 300: print(f"    {ec.text[:300]}")
+
+              # Ya está asignado?
+              r_bg = requests.get(f"{BASE}/builds/{bid}/betaGroups", headers=H)
+              existing = [g["id"] for g in r_bg.json().get("data", [])]
+              if gid in existing:
+                  print(f"  Ya asignado al grupo (skip)")
+                  continue
+
+              body = {"data": [{"type": "betaGroups", "id": gid}]}
+              r2 = requests.post(f"{BASE}/builds/{bid}/relationships/betaGroups",
+                                 headers=H, json=body)
+              print(f"  ASSIGN → HTTP {r2.status_code}")
+              if r2.status_code >= 300:
+                  print(f"    body: {r2.text[:500]}")
+              else:
+                  print(f"    OK, ahora en grupo Temazo Beta Team")
+
+          # 5) verificar
+          print("\n=== Verify ===")
+          for b in builds:
+              r_bg = requests.get(f"{BASE}/builds/{b['id']}/betaGroups", headers=H)
+              names = [g["attributes"].get("name","?") for g in r_bg.json().get("data",[])]
+              print(f"  Build {b['attributes'].get('version')} ({b['id']}) → {names or '(NONE)'}")
+          PYEOF
