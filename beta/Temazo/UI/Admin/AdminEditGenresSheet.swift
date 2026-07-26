@@ -58,7 +58,7 @@ struct AdminEditGenresSheet: View {
         } label: {
             HStack {
                 Image(systemName: selected.contains(g.id) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected.contains(g.id) ? .tint : Color.secondary)
+                    .foregroundStyle(selected.contains(g.id) ? Color.cyan : Color.secondary)
                 Text(g.name)
                 Spacer()
             }.contentShape(Rectangle())
