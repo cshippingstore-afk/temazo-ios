@@ -118,7 +118,7 @@ struct SearchScreen: View {
                     Task {
                         _ = try? await AdminService.shared.toggleHidden(
                             targetType: "artist", targetId: t.id, hidden: true)
-                        artists.removeAll { Int($0.id) == t.id }
+                        artists.removeAll { Int($0.id) ?? -1 == t.id }
                         artistHideTarget = nil
                     }
                 }
@@ -195,16 +195,18 @@ struct SearchScreen: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button {
-                artistReportTarget = (Int(a.id), a.name)
-            } label: {
-                Label("Reportar artista", systemImage: "exclamationmark.bubble")
-            }
-            if AdminService.shared.isAdmin {
-                Button(role: .destructive) {
-                    artistHideTarget = (Int(a.id), a.name)
+            if let aid = Int(a.id) {
+                Button {
+                    artistReportTarget = (aid, a.name)
                 } label: {
-                    Label("Ocultar artista", systemImage: "eye.slash")
+                    Label("Reportar artista", systemImage: "exclamationmark.bubble")
+                }
+                if AdminService.shared.isAdmin {
+                    Button(role: .destructive) {
+                        artistHideTarget = (aid, a.name)
+                    } label: {
+                        Label("Ocultar artista", systemImage: "eye.slash")
+                    }
                 }
             }
         }
