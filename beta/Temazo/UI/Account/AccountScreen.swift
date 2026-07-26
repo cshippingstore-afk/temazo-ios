@@ -43,6 +43,9 @@ struct AccountScreen: View {
     @State private var showEditBio = false
     @State private var bioText = ""
     @State private var showPrivacy = false
+    @State private var showAdminImport = false  // BETA v1.2.22
+
+    @ObservedObject private var adminService = AdminService.shared
     @State private var privacy: UserPrivacy? = nil
 
     @State private var photoItem: PhotosPickerItem? = nil
@@ -62,6 +65,9 @@ struct AccountScreen: View {
         }
         .fullScreenCover(isPresented: $showSettings) {
             SettingsScreen { showSettings = false }
+        }
+        .sheet(isPresented: $showAdminImport) {
+            AdminImportYouTubeSheet()
         }
         .alert("Nueva playlist", isPresented: $showCreatePlaylist) {
             TextField("Nombre", text: $newPlaylistName)
@@ -276,14 +282,29 @@ struct AccountScreen: View {
 
     private var actionButtons: some View {
         // "Salir" se ha movido dentro de SettingsScreen junto con cambiar contraseña, eliminar cuenta y legales.
-        Button { showSettings = true } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "gearshape").font(.system(size: 14))
-                Text("Ajustes y opciones").font(.system(size: 13))
+        VStack(spacing: 8) {
+            Button { showSettings = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "gearshape").font(.system(size: 14))
+                    Text("Ajustes y opciones").font(.system(size: 13))
+                }
+                .padding(.horizontal, 18).padding(.vertical, 8)
+                .background(Color.neonPink, in: Capsule())
+                .foregroundStyle(.white)
             }
-            .padding(.horizontal, 18).padding(.vertical, 8)
-            .background(Color.neonPink, in: Capsule())
-            .foregroundStyle(.white)
+            // BETA v1.2.22 — Admin panel (solo owners)
+            if AdminService.shared.isAdmin {
+                Button { showAdminImport = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "shield.lefthalf.filled").font(.system(size: 13))
+                        Text("Admin · Importar YouTube").font(.system(size: 12, weight: .semibold))
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(Capsule().fill(Color.cyan.opacity(0.18)))
+                    .overlay(Capsule().stroke(Color.cyan.opacity(0.5), lineWidth: 1))
+                    .foregroundStyle(Color.cyan)
+                }
+            }
         }
     }
 

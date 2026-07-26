@@ -68,6 +68,9 @@ final class AuthRepository: ObservableObject {
             print("[Auth] session refresh failed (offline?): \(error)")
             // No borramos currentUser: red fallida no es razón para echar al usuario.
         }
+        // BETA v1.2.22: refrescar estado admin (independiente del session refresh — si
+        // falla no debe romper la sesión).
+        await AdminService.shared.refreshAdminStatus()
     }
 
     /// Login con Google ID token (Sign-In with Google).
@@ -110,6 +113,7 @@ final class AuthRepository: ObservableObject {
                 persistCurrentUser()
                 TemazoAPI.shared.persistCookies()  // mantener login entre lanzamientos
                 OfflineOrchestrator.shared.onLogin()  // BETA v1.2.2 — sync inmediato tras login
+                Task { await AdminService.shared.refreshAdminStatus() }  // BETA v1.2.22 — check owner admin
                 return .success(())
             }
             return .failure(.message(localizeError(resp.error) ?? resp.msg ?? "Login error"))

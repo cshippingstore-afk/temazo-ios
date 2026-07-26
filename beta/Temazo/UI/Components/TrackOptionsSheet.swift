@@ -13,6 +13,14 @@ struct TrackOptionsSheet: View {
     var onShare: () -> Void
     var onRecommend: (() -> Void)? = nil
 
+    // BETA v1.2.22: acciones admin/report inline (no callbacks — el sheet abre
+    // sus propias sub-sheets). Se apoyan en AdminService.shared que lleva el flag is_admin.
+    @ObservedObject private var admin = AdminService.shared
+    @State private var showReport = false
+    @State private var showAdminReplace = false
+    @State private var showAdminEdit = false
+    @State private var showAdminHide = false
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -62,10 +70,64 @@ struct TrackOptionsSheet: View {
                     onRec(); onDismiss()
                 }
             }
+
+            // BETA v1.2.22 — Reportar problema (todos los users logueados)
+            Divider().background(Color.white.opacity(0.08)).padding(.vertical, 4)
+            row(icon: "exclamationmark.bubble", label: "Reportar problema", tint: Color.orange) {
+                showReport = true
+            }
+
+            // Admin-only actions
+            if admin.isAdmin {
+                Divider().background(Color.white.opacity(0.08)).padding(.vertical, 4)
+                row(icon: "arrow.left.arrow.right.circle",
+                    label: "Reemplazar video YouTube",
+                    tint: Color.cyan) { showAdminReplace = true }
+                row(icon: "square.and.pencil",
+                    label: "Editar metadata",
+                    tint: Color.cyan) { showAdminEdit = true }
+                row(icon: "eye.slash",
+                    label: "Ocultar del catálogo",
+                    tint: Color.red) { showAdminHide = true }
+            }
             Spacer().frame(height: 12)
         }
         .background(Color(red: 0.10, green: 0.04, blue: 0.18))
-        .presentationDetents([.fraction(0.55), .medium])
+        .presentationDetents([.fraction(admin.isAdmin ? 0.75 : 0.60), .large])
+        .sheet(isPresented: $showReport) {
+            AdminReportSheet(targetType: "track", targetId: Int(track.id),
+                             targetTitle: "\(track.title) · \(track.artistName ?? "")")
+        }
+        .sheet(isPresented: $showAdminReplace) {
+            AdminReplaceYouTubeSheet(trackId: Int(track.id),
+                trackTitle: "\(track.title) · \(track.artistName ?? "")",
+                currentYouTubeId: track.youtubeId)
+        }
+        .sheet(isPresented: $showAdminEdit) {
+            AdminEditMetaSheet(trackId: Int(track.id),
+                originalTitle: track.title,
+                originalArtist: track.artistName ?? "",
+                originalReleaseDate: nil,
+                originalCoverURL: track.coverUrl)
+        }
+        .confirmationDialog("¿Ocultar del catálogo?",
+                            isPresented: $showAdminHide, titleVisibility: .visible) {
+            Button("Ocultar", role: .destructive) { Task { await hideThisTrack() } }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("\(track.title) dejará de aparecer en búsquedas y trending. Reversible desde el panel admin.")
+        }
+    }
+
+    private func hideThisTrack() async {
+        let tid = Int(track.id)
+        do {
+            _ = try await AdminService.shared.toggleHidden(
+                targetType: "track", targetId: tid, hidden: true)
+            onDismiss()
+        } catch {
+            print("[Admin] hide track \(tid) failed: \(error)")
+        }
     }
 
     /// BETA v1: fila específica para descargar / borrar descarga.
