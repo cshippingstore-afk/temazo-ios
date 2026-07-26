@@ -23,7 +23,9 @@ struct HistoryScreen: View {
                             .padding(40)
                     } else {
                         ForEach(items) { h in
-                            row(h).onTapGesture { play(h) }
+                            row(h)
+                                .onTapGesture { play(h) }
+                                .trackLongPress(h.toTrack())
                         }
                     }
                     Spacer().frame(height: 30)

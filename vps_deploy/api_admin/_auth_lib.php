@@ -117,20 +117,48 @@ function auth_require_login(): array {
     return $u;
 }
 
+/**
+ * Whitelist de emails owners que son admin automáticamente sin necesidad
+ * de tener is_admin=1 en DB. Al login con estos emails se marcará is_admin=1
+ * de forma perezosa (sync entre whitelist y DB).
+ * Añadir/quitar aquí = cambio inmediato, no requiere query manual a DB.
+ */
+const ADMIN_EMAIL_WHITELIST = [
+    'cshippingstore@gmail.com',
+    'azkow@lecra.net',
+    'visolut@gmail.com',
+    'visolut@icloud.com',
+    'raul.ciuca@gmail.com',
+];
+
+function auth_email_in_admin_whitelist(?string $email): bool {
+    if ($email === null || $email === '') return false;
+    return in_array(strtolower(trim($email)), array_map('strtolower', ADMIN_EMAIL_WHITELIST), true);
+}
+
 function auth_is_admin(): bool {
     $u = auth_current_user();
-    return $u !== null && (int)($u['is_admin'] ?? 0) === 1;
+    if ($u === null) return false;
+    if ((int)($u['is_admin'] ?? 0) === 1) return true;
+    // Fallback: whitelist de emails — si el email está en la lista pero is_admin=0 en DB,
+    // marcarlo admin ahora (lazy sync) y devolver true.
+    if (auth_email_in_admin_whitelist($u['email'] ?? null)) {
+        try {
+            db()->prepare("UPDATE users SET is_admin=1 WHERE id=? AND is_admin=0")
+                ->execute([(int)$u['id']]);
+        } catch (Throwable $e) { /* silent — no bloqueamos por esto */ }
+        return true;
+    }
+    return false;
 }
 
 function auth_require_admin(): array {
     $u = auth_require_login();
-    if ((int)($u['is_admin'] ?? 0) !== 1) {
-        http_response_code(403);
-        header('Content-Type: application/json');
-        echo json_encode(['error' => 'admin_required']);
-        exit;
-    }
-    return $u;
+    if (auth_is_admin()) return $u;
+    http_response_code(403);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'admin_required']);
+    exit;
 }
 
 // ---------- CSRF ----------

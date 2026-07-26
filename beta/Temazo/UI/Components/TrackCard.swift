@@ -53,6 +53,7 @@ struct TrackCard: View {
             .frame(width: 150)
         }
         .buttonStyle(.plain)
+        .trackLongPress(track)
     }
 
     private func rankGlow(_ r: Int) -> Color {

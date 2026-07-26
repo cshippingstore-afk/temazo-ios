@@ -94,6 +94,7 @@ struct DownloadsScreen: View {
                     DownloadedRow(entry: entry) {
                         playTrack(from: entry)
                     }
+                    .trackLongPress(Self.trackFromEntry(entry))
                 }
             }
             .padding(.horizontal, 8)

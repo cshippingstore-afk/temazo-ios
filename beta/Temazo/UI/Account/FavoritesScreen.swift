@@ -21,9 +21,9 @@ struct FavoritesScreen: View {
                         Text("Aún no tienes favoritos").foregroundStyle(Color.white.opacity(0.5)).padding(40)
                     } else {
                         ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, t in
-                            row(t).onTapGesture {
-                                onTrackClick(tracks[idx], tracks, idx)
-                            }
+                            row(t)
+                                .onTapGesture { onTrackClick(tracks[idx], tracks, idx) }
+                                .trackLongPress(t)
                         }
                     }
                     Spacer().frame(height: 30)

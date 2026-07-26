@@ -45,6 +45,7 @@ struct ArtistScreen: View {
                             ForEach(Array(topTracks.enumerated()), id: \.element.id) { idx, t in
                                 topTrackRow(t, idx: idx)
                                     .onTapGesture { onPlayTracks(topTracks, idx) }
+                                    .trackLongPress(t)
                             }
                         }
                     }
@@ -85,6 +86,21 @@ struct ArtistScreen: View {
     }
 
     private var headerView: some View {
+        ZStack(alignment: .topTrailing) {
+            headerContent
+            // BETA v1.2.23 — menú admin/report en la esquina
+            if let aid = artist?.id {
+                EntityOptionsButton(
+                    targetType: "artist", targetId: Int(aid),
+                    targetName: artist?.name ?? displayName,
+                    iconColor: Color.white.opacity(0.8)
+                )
+                .padding(.top, 4).padding(.trailing, 4)
+            }
+        }
+    }
+
+    private var headerContent: some View {
         HStack(alignment: .center, spacing: 16) {
             // Foto a la izquierda — 130dp circular (igual que Android v1.52+)
             let photoSize: CGFloat = 130

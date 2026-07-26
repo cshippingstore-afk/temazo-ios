@@ -17,9 +17,10 @@ if (!$u) {
     echo json_encode(['ok' => true, 'is_admin' => false, 'user' => null]);
     exit;
 }
+// auth_is_admin() consulta el flag DB + whitelist de emails (lazy sync).
 echo json_encode([
     'ok' => true,
-    'is_admin' => (int)($u['is_admin'] ?? 0) === 1,
+    'is_admin' => auth_is_admin(),
     'user' => [
         'id' => (int)$u['id'],
         'email' => $u['email'] ?? '',

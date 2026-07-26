@@ -259,6 +259,7 @@ struct PlaylistDetailScreen: View {
         .onTapGesture {
             onPlay(t, tracks, index)
         }
+        .trackLongPress(t)
     }
 
     private func reload() async {

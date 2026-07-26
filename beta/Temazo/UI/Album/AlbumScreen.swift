@@ -33,6 +33,7 @@ struct AlbumScreen: View {
                             ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, t in
                                 trackRow(t, idx: idx + 1)
                                     .onTapGesture { onPlayTracks(tracks, idx) }
+                                    .trackLongPress(t)
                             }
                         }
                     }
@@ -53,6 +54,15 @@ struct AlbumScreen: View {
                 Spacer()
                 if loading {
                     ProgressView().tint(Color.neonPink).padding(.trailing, 12)
+                }
+                // BETA v1.2.23 — admin/report menú
+                if let a = album {
+                    EntityOptionsButton(
+                        targetType: "album", targetId: Int(a.id),
+                        targetName: "\(a.name)\(artist.map { " · \($0.name)" } ?? "")",
+                        iconColor: Color.white.opacity(0.85)
+                    )
+                    .padding(.trailing, 4)
                 }
             }
             .frame(height: 50)

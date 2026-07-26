@@ -11,6 +11,9 @@ struct SearchScreen: View {
     @State private var users: [PublicUserBrief] = []
     @State private var isLoading: Bool = false
     @State private var searchTask: Task<Void, Never>? = nil
+    // BETA v1.2.23 — targets para report/hide de artistas desde context menu
+    @State private var artistReportTarget: (id: Int, name: String)? = nil
+    @State private var artistHideTarget: (id: Int, name: String)? = nil
     @FocusState private var focused: Bool
     @EnvironmentObject var player: Player
     @StateObject private var history = SearchHistoryRepo.shared
@@ -99,7 +102,34 @@ struct SearchScreen: View {
             artists = []
             users = []
         }
+        .sheet(item: Binding(
+            get: { artistReportTarget.map { ReportSheetItem(id: $0.id, name: $0.name) } },
+            set: { artistReportTarget = $0.map { ($0.id, $0.name) } })
+        ) { item in
+            AdminReportSheet(targetType: "artist", targetId: item.id, targetTitle: item.name)
+        }
+        .confirmationDialog("¿Ocultar artista?",
+            isPresented: Binding(
+                get: { artistHideTarget != nil },
+                set: { if !$0 { artistHideTarget = nil } }),
+            titleVisibility: .visible) {
+            Button("Ocultar", role: .destructive) {
+                if let t = artistHideTarget {
+                    Task {
+                        _ = try? await AdminService.shared.toggleHidden(
+                            targetType: "artist", targetId: t.id, hidden: true)
+                        artists.removeAll { Int($0.id) == t.id }
+                        artistHideTarget = nil
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) { artistHideTarget = nil }
+        } message: {
+            Text(artistHideTarget?.name ?? "")
+        }
     }
+
+    private struct ReportSheetItem: Identifiable { let id: Int; let name: String }
 
     @ViewBuilder
     private func sectionTitle(_ text: String) -> some View {
@@ -164,6 +194,20 @@ struct SearchScreen: View {
             .padding(.horizontal, 16).padding(.vertical, 8)
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                artistReportTarget = (Int(a.id), a.name)
+            } label: {
+                Label("Reportar artista", systemImage: "exclamationmark.bubble")
+            }
+            if AdminService.shared.isAdmin {
+                Button(role: .destructive) {
+                    artistHideTarget = (Int(a.id), a.name)
+                } label: {
+                    Label("Ocultar artista", systemImage: "eye.slash")
+                }
+            }
+        }
     }
 
     @ViewBuilder
