@@ -2,22 +2,20 @@
 /**
  * /api/yt_proxy.php?id=YOUTUBE_VIDEO_ID
  *
- * Estrategia v4 (2026-07-25):
- *   YouTube requiere LOGIN para música protegida. Usamos pool de cookies
- *   auto-syncronizadas desde el/los Chrome de los owners (Task Scheduler
- *   sube /opt/piped-prod/cookies/owner_<host>.txt cada 12h).
+ * Estrategia v5 (2026-07-26):
+ *   YouTube ahora IP-locka las URLs de googlevideo — 302 redirect al cliente
+ *   da 403 porque la IP del iPhone != IP del VPS que firmó la URL.
+ *   Solución: descargar el m4a al VPS con yt-dlp -o y servir localmente
+ *   con Range. Lento primera vez (~5-10s), instantáneo después.
  *
  * Niveles:
- *  Nivel 1: /tmp/_yt_audio_cache/<id>.m4a — bytes descargados (warmer)
- *           Sirve con Range si >2MB (no corrupto).
- *  Nivel 2: /tmp/_yt_stream_cache/<id>.url — URL googlevideo cacheada (4h)
- *           302 redirect. AVPlayer tira directo a googlevideo.
- *  Nivel 3: yt-dlp con cookie pool round-robin
- *           - Elige owner_*.txt aleatorio del pool
- *           - Retry con siguiente cookie si falla
- *           - Fallback sin cookies (videos "safe" universales)
- *  Nivel 4: bgutil PO_TOKEN provider (127.0.0.1:4416) para videos que
- *           necesiten POT extra (activado auto por plugin yt-dlp).
+ *  Nivel 1: /tmp/_yt_audio_cache/<id>.m4a — bytes descargados (por warmer o request previo)
+ *           Si existe Y es > 500KB, sirve con Range headers.
+ *  Nivel 2: Download síncrono con yt-dlp (cookie pool round-robin) al mismo
+ *           path del cache, luego sirve.
+ *
+ * Cookies pool: /var/www/vhosts/temazo.es/private/cookies/owner_*.txt
+ * Auto-sync desde Firefox TemazoBot del owner (Task Scheduler cada 12h).
  */
 set_time_limit(0);
 ignore_user_abort(true);
@@ -35,11 +33,8 @@ function log_line(string $msg): void {
         FILE_APPEND | LOCK_EX);
 }
 
-// === Nivel 1: disk cache (BYTES descargados) — sólo si NO está truncado ===
-$audioCache = '/tmp/_yt_audio_cache';
-$audioFile = "$audioCache/$id.m4a";
-if (is_file($audioFile) && filesize($audioFile) >= 2_000_000) {
-    $size = filesize($audioFile);
+function serve_file(string $path): void {
+    $size = filesize($path);
     $start = 0; $end = $size - 1;
     if (!empty($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/', $_SERVER['HTTP_RANGE'], $m)) {
         $start = $m[1] === '' ? 0 : (int)$m[1];
@@ -53,7 +48,7 @@ if (is_file($audioFile) && filesize($audioFile) >= 2_000_000) {
     header('Accept-Ranges: bytes');
     header('Content-Length: ' . ($end - $start + 1));
     header('Cache-Control: public, max-age=14400');
-    $f = fopen($audioFile, 'rb');
+    $f = fopen($path, 'rb');
     if ($f) {
         fseek($f, $start);
         $remaining = $end - $start + 1;
@@ -65,78 +60,82 @@ if (is_file($audioFile) && filesize($audioFile) >= 2_000_000) {
         }
         fclose($f);
     }
+}
+
+$audioCache = '/tmp/_yt_audio_cache';
+@mkdir($audioCache, 0755, true);
+$audioFile = "$audioCache/$id.m4a";
+
+// === Nivel 1: disk cache hit — servir directo ===
+if (is_file($audioFile) && filesize($audioFile) >= 500_000) {
+    log_line("CACHE_HIT id=$id size=" . filesize($audioFile));
+    serve_file($audioFile);
     exit;
 }
 
-// === Nivel 2: URL cache (4h) — 302 redirect ===
-$urlCache = '/tmp/_yt_stream_cache';
-@mkdir($urlCache, 0775, true);
-$urlCacheFile = "$urlCache/$id.url";
-$streamUrl = null;
-if (is_file($urlCacheFile) && (time() - filemtime($urlCacheFile)) < 14400) {
-    $cached = trim((string)@file_get_contents($urlCacheFile));
-    if (filter_var($cached, FILTER_VALIDATE_URL)) {
-        $streamUrl = $cached;
-    }
-}
+// === Nivel 2: download síncrono con yt-dlp ===
+// Lock por video para evitar 2 requests bajando el mismo archivo
+$lockFile = "$audioCache/$id.lock";
+$lockHandle = @fopen($lockFile, 'c');
+if ($lockHandle) {
+    // Wait blocking (max 30s por SIGALRM fallback)
+    if (flock($lockHandle, LOCK_EX)) {
+        // Otro proceso puede haber terminado la descarga — re-check
+        if (is_file($audioFile) && filesize($audioFile) >= 500_000) {
+            flock($lockHandle, LOCK_UN); fclose($lockHandle); @unlink($lockFile);
+            log_line("CACHE_HIT_AFTER_LOCK id=$id");
+            serve_file($audioFile);
+            exit;
+        }
 
-// === Nivel 3: yt-dlp con cookie pool ===
-if (!$streamUrl) {
-    // Pool de cookies de owners (subidos por sync_cookies.py cada 12h)
-    $cookieDir = '/var/www/vhosts/temazo.es/private/cookies';
-    $cookieFiles = is_dir($cookieDir) ? glob("$cookieDir/owner_*.txt") : [];
-    // Shuffle para round-robin real entre calls
-    shuffle($cookieFiles);
-    // Añadir null al final = último intento sin cookies (por si es un video "universal")
-    $attempts = $cookieFiles;
-    $attempts[] = null;
+        // Cookie pool
+        $cookieDir = '/var/www/vhosts/temazo.es/private/cookies';
+        $cookieFiles = is_dir($cookieDir) ? glob("$cookieDir/owner_*.txt") : [];
+        shuffle($cookieFiles);
+        $attempts = $cookieFiles;
+        $attempts[] = null;  // último fallback sin cookies
 
-    // yt-dlp binario: hardcoded al /usr/local/bin (v2026.07 con plugin bgutil POT).
-    // No usar is_executable() — open_basedir restringe a paths del sitio,
-    // pero shell_exec sí puede ejecutar binarios en cualquier path absoluto.
-    $ytdlp = '/usr/local/bin/yt-dlp';
+        $ytdlp = '/usr/local/bin/yt-dlp';
+        $tmpOut = "$audioFile.tmp";
+        $downloaded = false;
 
-    foreach ($attempts as $cookieFile) {
-        $cookieArg = $cookieFile ? ('--cookies ' . escapeshellarg($cookieFile) . ' ') : '';
-        $cmd = $ytdlp . ' '
-             . $cookieArg
-             . '-f "bestaudio[ext=m4a]/bestaudio" '
-             . '-g --no-warnings '
-             . '--no-playlist --skip-download '
-             . escapeshellarg("https://www.youtube.com/watch?v=$id")
-             . ' 2>&1';
-        $out = @shell_exec($cmd);
-        // Parse: coger la ULTIMA linea que sea URL https:// (yt-dlp puede emitir info
-        // lines antes de la URL, ej "Downloading m3u8 information")
-        $line = '';
-        foreach (array_reverse(explode("\n", trim((string)$out))) as $l) {
-            $l = trim($l);
-            if (str_starts_with($l, 'https://') && filter_var($l, FILTER_VALIDATE_URL)) {
-                $line = $l;
+        foreach ($attempts as $cookieFile) {
+            $cookieArg = $cookieFile ? ('--cookies ' . escapeshellarg($cookieFile) . ' ') : '';
+            @unlink($tmpOut);
+            $cmd = $ytdlp . ' '
+                 . $cookieArg
+                 . '-f "bestaudio[ext=m4a]/bestaudio" '
+                 . '-o ' . escapeshellarg($tmpOut) . ' '
+                 . '--no-warnings --no-playlist --no-part '
+                 . escapeshellarg("https://www.youtube.com/watch?v=$id")
+                 . ' 2>&1';
+            $out = @shell_exec($cmd);
+            if (is_file($tmpOut) && filesize($tmpOut) >= 500_000) {
+                @rename($tmpOut, $audioFile);
+                $tag = $cookieFile ? basename($cookieFile) : 'no-cookies';
+                log_line("DL_OK id=$id via=$tag size=" . filesize($audioFile));
+                $downloaded = true;
                 break;
+            } else {
+                $tag = $cookieFile ? basename($cookieFile) : 'no-cookies';
+                $err = substr(str_replace(["\n","\r"], ' ', (string)$out), 0, 200);
+                log_line("DL_FAIL id=$id via=$tag err=$err");
             }
         }
-        if ($line !== '') {
-            $streamUrl = $line;
-            @file_put_contents($urlCacheFile, $streamUrl);
-            $tag = $cookieFile ? basename($cookieFile) : 'no-cookies';
-            log_line("OK id=$id via=$tag");
-            break;
-        } else {
-            $tag = $cookieFile ? basename($cookieFile) : 'no-cookies';
-            $err = substr(str_replace(["\n","\r"], ' ', (string)$out), 0, 200);
-            log_line("FAIL id=$id via=$tag err=$err");
-        }
-    }
 
-    if (!$streamUrl) {
-        http_response_code(502);
-        echo 'ytdlp_failed';
-        exit;
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+        @unlink($lockFile);
+
+        if ($downloaded) {
+            serve_file($audioFile);
+            exit;
+        }
+    } else {
+        fclose($lockHandle);
     }
 }
 
-// 302 redirect — AVPlayer hace TLS directo a googlevideo.
-header('Cache-Control: private, max-age=300');
-header('Location: ' . $streamUrl, true, 302);
+http_response_code(502);
+echo 'ytdlp_failed';
 exit;
