@@ -44,6 +44,11 @@ struct AccountScreen: View {
     @State private var bioText = ""
     @State private var showPrivacy = false
     @State private var showAdminImport = false  // BETA v1.2.22
+    // BETA v1.2.24 — admin panel
+    @State private var showAdminImportPlaylist = false
+    @State private var showAdminAudit = false
+    @State private var showAdminReports = false
+    @State private var showAdminYTSearch = false
 
     @ObservedObject private var adminService = AdminService.shared
     @State private var privacy: UserPrivacy? = nil
@@ -68,6 +73,21 @@ struct AccountScreen: View {
         }
         .sheet(isPresented: $showAdminImport) {
             AdminImportYouTubeSheet()
+        }
+        .sheet(isPresented: $showAdminImportPlaylist) {
+            AdminImportPlaylistSheet()
+        }
+        .sheet(isPresented: $showAdminYTSearch) {
+            AdminYouTubeSearchSheet { chosenId in
+                // Solo búsqueda global — no reemplaza nada. Copiar al portapapeles.
+                UIPasteboard.general.string = chosenId
+            }
+        }
+        .fullScreenCover(isPresented: $showAdminAudit) {
+            AdminAuditLogScreen(onBack: { showAdminAudit = false })
+        }
+        .fullScreenCover(isPresented: $showAdminReports) {
+            AdminReportsQueueScreen(onBack: { showAdminReports = false })
         }
         .alert("Nueva playlist", isPresented: $showCreatePlaylist) {
             TextField("Nombre", text: $newPlaylistName)
@@ -292,12 +312,29 @@ struct AccountScreen: View {
                 .background(Color.neonPink, in: Capsule())
                 .foregroundStyle(.white)
             }
-            // BETA v1.2.22 — Admin panel (solo owners)
-            if AdminService.shared.isAdmin {
-                Button { showAdminImport = true } label: {
+            // BETA v1.2.22+ — Admin panel (solo owners). Menú con las 4 acciones globales.
+            if adminService.isAdmin {
+                Menu {
+                    Button { showAdminImport = true } label: {
+                        Label("Importar track YT", systemImage: "square.and.arrow.down")
+                    }
+                    Button { showAdminImportPlaylist = true } label: {
+                        Label("Importar playlist YT", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    Button { showAdminAudit = true } label: {
+                        Label("Historial admin", systemImage: "clock.arrow.circlepath")
+                    }
+                    Button { showAdminReports = true } label: {
+                        Label("Cola de reportes", systemImage: "exclamationmark.bubble")
+                    }
+                    Button { showAdminYTSearch = true } label: {
+                        Label("Buscar en YouTube", systemImage: "magnifyingglass")
+                    }
+                } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "shield.lefthalf.filled").font(.system(size: 13))
-                        Text("Admin · Importar YouTube").font(.system(size: 12, weight: .semibold))
+                        Text("Panel Admin").font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down").font(.system(size: 10))
                     }
                     .padding(.horizontal, 14).padding(.vertical, 6)
                     .background(Capsule().fill(Color.cyan.opacity(0.18)))

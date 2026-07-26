@@ -20,6 +20,12 @@ struct TrackOptionsSheet: View {
     @State private var showAdminReplace = false
     @State private var showAdminEdit = false
     @State private var showAdminHide = false
+    // BETA v1.2.24 — Tier 2/3 admin
+    @State private var showAdminBoost = false
+    @State private var showAdminReassign = false
+    @State private var showAdminMerge = false
+    @State private var showAdminRehydrate = false
+    @State private var showAdminYTSearch = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,9 +89,24 @@ struct TrackOptionsSheet: View {
                 row(icon: "arrow.left.arrow.right.circle",
                     label: "Reemplazar video YouTube",
                     tint: Color.cyan) { showAdminReplace = true }
+                row(icon: "magnifyingglass.circle",
+                    label: "Buscar YT + preview",
+                    tint: Color.cyan) { showAdminYTSearch = true }
                 row(icon: "square.and.pencil",
                     label: "Editar metadata",
                     tint: Color.cyan) { showAdminEdit = true }
+                row(icon: "square.stack.3d.up.badge.a",
+                    label: "Reasignar álbum",
+                    tint: Color.cyan) { showAdminReassign = true }
+                row(icon: "chart.line.uptrend.xyaxis",
+                    label: "Boost trending",
+                    tint: Color.cyan) { showAdminBoost = true }
+                row(icon: "arrow.triangle.merge",
+                    label: "Fusionar con otro track",
+                    tint: Color.cyan) { showAdminMerge = true }
+                row(icon: "arrow.clockwise.circle",
+                    label: "Re-hidratar desde YT",
+                    tint: Color.orange) { showAdminRehydrate = true }
                 row(icon: "eye.slash",
                     label: "Ocultar del catálogo",
                     tint: Color.red) { showAdminHide = true }
@@ -116,6 +137,41 @@ struct TrackOptionsSheet: View {
             Button("Cancelar", role: .cancel) {}
         } message: {
             Text("\(track.title) dejará de aparecer en búsquedas y trending. Reversible desde el panel admin.")
+        }
+        // BETA v1.2.24 — nuevas sheets Tier 2/3
+        .sheet(isPresented: $showAdminBoost) {
+            AdminBoostSheet(trackId: Int(track.id),
+                trackTitle: "\(track.title) · \(track.artistName ?? "")",
+                currentPopularity: track.popularity ?? 0)
+        }
+        .sheet(isPresented: $showAdminReassign) {
+            AdminReassignAlbumSheet(trackId: Int(track.id),
+                trackTitle: "\(track.title) · \(track.artistName ?? "")",
+                currentAlbumName: track.album)
+        }
+        .sheet(isPresented: $showAdminMerge) {
+            AdminMergeTracksSheet(sourceTrack: track)
+        }
+        .sheet(isPresented: $showAdminYTSearch) {
+            AdminYouTubeSearchSheet(initialQuery: "\(track.title) \(track.artistName ?? "")") { chosenId in
+                Task {
+                    _ = try? await AdminService.shared.replaceYouTube(
+                        trackId: Int(track.id), youtube: chosenId,
+                        note: "via search+preview")
+                }
+            }
+        }
+        .confirmationDialog("¿Re-hidratar desde YouTube?",
+                            isPresented: $showAdminRehydrate, titleVisibility: .visible) {
+            Button("Re-hidratar") {
+                Task {
+                    _ = try? await AdminService.shared.forceRehydrate(
+                        targetType: "track", targetId: Int(track.id))
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Se ejecutará el pipeline en background. Refresca la app en 1-2 min para ver metadata actualizada.")
         }
     }
 

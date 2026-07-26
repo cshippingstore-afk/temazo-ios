@@ -20,6 +20,11 @@ struct ArtistScreen: View {
     @State private var error: String? = nil
     @State private var following = false
     @State private var togglingFollow = false
+    // BETA v1.2.24 — admin actions
+    @State private var adminEditGenres = false
+    @State private var adminEditBio = false
+    @State private var adminBan = false
+    @State private var adminRehydrate = false
 
     var displayName: String { artist?.name ?? artistName ?? "Artista" }
 
@@ -90,15 +95,78 @@ struct ArtistScreen: View {
             headerContent
             // BETA v1.2.23 — menú admin/report en la esquina
             if let aid = artist?.id {
-                EntityOptionsButton(
-                    targetType: "artist", targetId: Int(aid),
-                    targetName: artist?.name ?? displayName,
-                    iconColor: Color.white.opacity(0.8)
-                )
+                HStack(spacing: 4) {
+                    if AdminService.shared.isAdmin {
+                        Menu {
+                            Button { adminEditGenres = true } label: {
+                                Label("Editar géneros", systemImage: "tag")
+                            }
+                            Button { adminEditBio = true } label: {
+                                Label("Editar bio", systemImage: "text.bubble")
+                            }
+                            Button { adminRehydrate = true } label: {
+                                Label("Re-hidratar YT", systemImage: "arrow.clockwise.circle")
+                            }
+                            Divider()
+                            Button(role: .destructive) { adminBan = true } label: {
+                                Label("Ban artista completo", systemImage: "hand.raised")
+                            }
+                        } label: {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Color.cyan)
+                                .frame(width: 34, height: 34)
+                        }
+                    }
+                    EntityOptionsButton(
+                        targetType: "artist", targetId: Int(aid),
+                        targetName: artist?.name ?? displayName,
+                        iconColor: Color.white.opacity(0.8)
+                    )
+                }
                 .padding(.top, 4).padding(.trailing, 4)
             }
         }
+        .sheet(isPresented: $adminEditGenres) {
+            if let a = artist {
+                AdminEditGenresSheet(artistId: Int(a.id), artistName: a.name)
+            }
+        }
+        .sheet(isPresented: $adminEditBio) {
+            if let a = artist {
+                AdminEditBioSheet(artistId: Int(a.id), artistName: a.name, currentBio: bestBio(a))
+            }
+        }
+        .confirmationDialog("¿Ban artista completo?",
+                            isPresented: $adminBan, titleVisibility: .visible) {
+            Button("Ban artista + tracks + álbumes", role: .destructive) {
+                Task {
+                    if let a = artist {
+                        _ = try? await AdminService.shared.banArtist(artistId: Int(a.id))
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("El artista y TODOS sus tracks/álbumes se ocultarán. Reversible desde el panel admin.")
+        }
+        .confirmationDialog("¿Re-hidratar artista?",
+                            isPresented: $adminRehydrate, titleVisibility: .visible) {
+            Button("Re-hidratar") {
+                Task {
+                    if let a = artist {
+                        _ = try? await AdminService.shared.forceRehydrate(
+                            targetType: "artist", targetId: Int(a.id))
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Se ejecuta el pipeline completo en background: tracks, álbumes, bio. Refresca la app en 2-5 min.")
+        }
     }
+
+    private func bestBio(_ a: Artist) -> String? { a.bio }
 
     private var headerContent: some View {
         HStack(alignment: .center, spacing: 16) {
