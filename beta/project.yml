@@ -11,9 +11,11 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.27'
+    MARKETING_VERSION: '1.2.28'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.28: Player — vuelve a salir desde fondo (peticion user), topBar pegado al
+    # notch con solo 4pt de aire (no tan bajo), sin desperdiciar espacio vertical
     # v1.2.27: Player Spotify-style FIXED — safe area top notch, se levanta desde el
     # mini (no desde el fondo), spring optimizado sin lag, allowsHitTesting condicionado
     # v1.2.26: Player Spotify-style — drag continuo del mini→full siguiendo el dedo

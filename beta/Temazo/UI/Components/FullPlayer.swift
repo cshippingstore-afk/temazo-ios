@@ -52,9 +52,9 @@ struct FullPlayer: View {
                         .ignoresSafeArea()
 
                     VStack(spacing: 14) {
-                        // BETA v1.2.27: respetar safe area top para NO tapar notch.
-                        // topBar (chevron + REPRODUCIENDO + avatar) queda BAJO el status bar.
-                        Spacer().frame(height: geo.safeAreaInsets.top > 0 ? geo.safeAreaInsets.top : 8)
+                        // BETA v1.2.28: topBar (chevron/REPRODUCIENDO/avatar) pegado al notch
+                        // sin ser tapado. Solo un pelín de aire (4pt) tras la safe area.
+                        Spacer().frame(height: geo.safeAreaInsets.top + 4)
                         topBar(closeAction: onClose)
 
                         if showLyrics {

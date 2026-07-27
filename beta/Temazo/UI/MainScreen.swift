@@ -142,12 +142,6 @@ struct MainScreen: View {
 
             if fullPlayerVisible, player.state.currentTrack != nil {
                 GeometryReader { geo in
-                    // Distancia de recorrido: desde la POSICIÓN del mini (bottom - miniHeight
-                    // - bottomNav) hasta el top de la pantalla. Así el FullPlayer "se levanta
-                    // desde el mini", no desde el fondo del screen.
-                    let bottomSafe = geo.safeAreaInsets.bottom
-                    let miniPlayerTopFromBottom: CGFloat = 68 + 60 + bottomSafe  // mini(≈68) + nav(≈60) + safe
-                    let travelDistance = geo.size.height - miniPlayerTopFromBottom
                     FullPlayer(
                         onClose: { collapseFullPlayer() },
                         onCoverClick: { collapseFullPlayer(); handleCoverClick() },
@@ -158,14 +152,14 @@ struct MainScreen: View {
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    // progress=1 → offset=0 (top). progress=0 → offset=travelDistance (levantado desde el mini).
-                    .offset(y: (1 - visibleExpandProgress) * travelDistance)
-                    // Cuando el drag está a medio camino, el FullPlayer queda semi-transparente
-                    // para ver la app detrás. Al 100% expandido, opaco total.
-                    .opacity(min(1, visibleExpandProgress * 1.5 + 0.3))
+                    // BETA v1.2.28: vuelve a salir desde el fondo del screen (petición user).
+                    // Cuando progress=0 → offset=screenHeight (invisible fuera abajo).
+                    // Cuando progress=1 → offset=0 (fullscreen).
+                    .offset(y: (1 - visibleExpandProgress) * geo.size.height)
                 }
+                .ignoresSafeArea()
                 .zIndex(10)
-                .allowsHitTesting(visibleExpandProgress > 0.5)  // solo interactúa cuando >50% expandido
+                .allowsHitTesting(visibleExpandProgress > 0.5)
             }
 
             if let txt = toastText {
