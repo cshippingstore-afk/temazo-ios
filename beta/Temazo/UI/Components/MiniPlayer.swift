@@ -13,6 +13,12 @@ struct MiniPlayer: View {
     let onAddToPlaylist: () -> Void
     let onLoadPlaylist: () -> Void   // no usado en UI (compat), gestionado por la pestaña Playlists
 
+    // BETA v1.2.26 — Spotify-style drag interactivo. Si estan set, el MiniPlayer
+    // reporta el drag delta al parent (que maneja expandProgress 0→1 en vivo).
+    // Si son nil, mantiene comportamiento discreto (umbral -80 → onExpand).
+    var onDragToExpand: ((CGFloat) -> Void)? = nil
+    var onDragEnded: ((CGFloat) -> Void)? = nil  // pasa velocity final
+
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
     @State private var dragV: CGFloat = 0
@@ -127,21 +133,34 @@ struct MiniPlayer: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .contentShape(Rectangle())
                 .onTapGesture { onExpand() }
-                // Gestos: swipe vertical hacia arriba expande, swipe horizontal cambia canción.
+                // Gestos: swipe vertical hacia arriba expande (Spotify-style continuo si
+                // hay callbacks del parent), swipe horizontal cambia canción.
                 .gesture(
                     DragGesture(minimumDistance: 10)
                         .onChanged { val in
                             dragV = val.translation.height
                             dragH = val.translation.width
+                            // Modo interactivo Spotify: mientras es predominantemente vertical
+                            // hacia arriba, delegamos al parent para expansión continua.
+                            if let cb = onDragToExpand,
+                               abs(val.translation.height) > abs(val.translation.width),
+                               val.translation.height < 0 {
+                                cb(val.translation.height)
+                            }
                         }
                         .onEnded { val in
                             let dx = val.translation.width
                             let dy = val.translation.height
+                            let vy = val.predictedEndTranslation.height - dy
                             if abs(dy) > abs(dx) {
                                 // vertical
-                                if dy < -80 { onExpand() }
+                                if let cb = onDragEnded {
+                                    cb(vy)  // Parent decide snap 0/1 según posición + velocity
+                                } else {
+                                    if dy < -80 { onExpand() }
+                                }
                             } else {
-                                // horizontal
+                                // horizontal → next/prev
                                 if dx < -120 { player.next() }
                                 else if dx > 120 { player.prev() }
                             }

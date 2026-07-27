@@ -7,6 +7,12 @@ struct FullPlayer: View {
     let onAddToPlaylist: () -> Void
     let onLoadPlaylist: () -> Void
 
+    // BETA v1.2.26 — Spotify-style drag continuo hacia abajo. Parent gestiona
+    // expandProgress 1→0 durante el drag. Si nil, mantiene comportamiento
+    // discreto (dy > 140 → onClose).
+    var onDragToCollapse: ((CGFloat) -> Void)? = nil
+    var onDragEnded: ((CGFloat) -> Void)? = nil  // velocity final para snap
+
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
 
@@ -73,21 +79,35 @@ struct FullPlayer: View {
                     }
                 }
                 // Gestos Spotify:
-                //  - Swipe ↓ cierra FullPlayer
+                //  - Swipe ↓ colapsa el FullPlayer (continuo si parent gestiona)
                 //  - Swipe ←/→ (en el 75% superior) siguiente/anterior canción
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 12)
+                        .onChanged { val in
+                            // Modo interactivo Spotify: mientras es vertical hacia abajo,
+                            // el parent recibe delta y ajusta expandProgress 1→0.
+                            if let cb = onDragToCollapse,
+                               abs(val.translation.height) > abs(val.translation.width),
+                               val.translation.height > 0 {
+                                cb(val.translation.height)
+                            }
+                        }
                         .onEnded { val in
                             let dx = val.translation.width
                             let dy = val.translation.height
                             let startY = val.startLocation.y
-                            // Vertical down — siempre cierra
-                            if abs(dy) > abs(dx), dy > 140 {
-                                onClose()
+                            let vy = val.predictedEndTranslation.height - dy
+                            // Vertical down
+                            if abs(dy) > abs(dx), dy > 0 {
+                                if let cb = onDragEnded {
+                                    cb(vy)  // parent decide snap
+                                } else if dy > 140 {
+                                    onClose()
+                                }
                                 return
                             }
-                            // Horizontal — solo si empieza por encima del 75% (no choca con controles)
+                            // Horizontal — solo si empieza por encima del 75%
                             if abs(dx) > abs(dy), startY < geo.size.height * 0.75 {
                                 if dx < -120 { player.next() }
                                 else if dx > 120 { player.prev() }

@@ -49,6 +49,10 @@ struct MainScreen: View {
     @State private var tab: AppTab = .home
     @State private var detailStack: [Detail] = []
     @State private var fullPlayerShown: Bool = false
+    // BETA v1.2.26 — Spotify-style: expandProgress 0=mini, 1=full. dragDelta se acumula
+    // durante el gesto y se aplica junto con expandProgress para la posición visible.
+    @State private var expandProgress: CGFloat = 0
+    @State private var dragDelta: CGFloat = 0  // negative=arriba (expandiendo), positive=abajo (colapsando)
     @State private var addToPlaylistTrack: Track? = nil
     @State private var showLoadPlaylist: Bool = false
     @State private var showCompleteProfile: Bool = false
@@ -120,27 +124,37 @@ struct MainScreen: View {
 
                 if player.state.currentTrack != nil {
                     MiniPlayer(
-                        onExpand: { fullPlayerShown = true },
+                        onExpand: { expandFullPlayer() },
                         onCoverClick: handleCoverClick,
                         onArtistClick: handleArtistClick,
                         onAddToPlaylist: handleAddToPlaylist,
-                        onLoadPlaylist: { showLoadPlaylist = true }
+                        onLoadPlaylist: { showLoadPlaylist = true },
+                        // BETA v1.2.26 — Spotify-style drag interactivo
+                        onDragToExpand: { dy in dragDelta = dy },
+                        onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: false) }
                     )
+                    .opacity(1 - visibleExpandProgress)  // fade out mientras se expande
                     .transition(.move(edge: .bottom))
                 }
 
                 bottomNav
             }
 
-            if fullPlayerShown, player.state.currentTrack != nil {
-                FullPlayer(
-                    onClose: { fullPlayerShown = false },
-                    onCoverClick: { fullPlayerShown = false; handleCoverClick() },
-                    onArtistClick: { fullPlayerShown = false; handleArtistClick() },
-                    onAddToPlaylist: { handleAddToPlaylist() },
-                    onLoadPlaylist: { showLoadPlaylist = true }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+            if fullPlayerVisible, player.state.currentTrack != nil {
+                GeometryReader { geo in
+                    FullPlayer(
+                        onClose: { collapseFullPlayer() },
+                        onCoverClick: { collapseFullPlayer(); handleCoverClick() },
+                        onArtistClick: { collapseFullPlayer(); handleArtistClick() },
+                        onAddToPlaylist: { handleAddToPlaylist() },
+                        onLoadPlaylist: { showLoadPlaylist = true },
+                        onDragToCollapse: { dy in dragDelta = dy },
+                        onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
+                    )
+                    // El FullPlayer desliza desde abajo según visibleExpandProgress.
+                    .offset(y: (1 - visibleExpandProgress) * geo.size.height)
+                }
+                .ignoresSafeArea()
                 .zIndex(10)
             }
 
@@ -161,7 +175,8 @@ struct MainScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: player.state.currentTrack != nil)
-        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: fullPlayerShown)
+        .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.85),
+                   value: expandProgress)
         .animation(.easeInOut(duration: 0.2), value: toastText)
         .sheet(item: $addToPlaylistTrack) { t in
             AddToPlaylistSheet(
@@ -587,11 +602,62 @@ struct MainScreen: View {
         if auth.currentUser == nil {
             showToast("Inicia sesión para añadir a playlists")
             detailStack = [.account]
-            fullPlayerShown = false
+            collapseFullPlayer()
             return
         }
         if let t = player.state.currentTrack {
             addToPlaylistTrack = t
+        }
+    }
+
+    // MARK: - Spotify-style Player Expand (BETA v1.2.26)
+
+    private var screenHeight: CGFloat { UIScreen.main.bounds.height }
+
+    /// Progress efectivo mientras hay un drag. Combina el "estado final"
+    /// (expandProgress) con el delta del gesto en curso (dragDelta), clamped 0-1.
+    private var visibleExpandProgress: CGFloat {
+        let deltaProg = -dragDelta / screenHeight
+        return max(0, min(1, expandProgress + deltaProg))
+    }
+
+    /// El FullPlayer se renderiza mientras hay progreso > 0 o drag activo.
+    private var fullPlayerVisible: Bool {
+        expandProgress > 0.001 || dragDelta < -0.5
+    }
+
+    /// Snap final tras soltar el drag. Umbral 40% para completar, o velocity
+    /// fuerte para abrir/cerrar directamente.
+    private func commitDragSnap(velocity: CGFloat, fromFull: Bool) {
+        let prog = visibleExpandProgress
+        let target: CGFloat
+        if velocity < -300 {
+            target = 1
+        } else if velocity > 300 {
+            target = 0
+        } else {
+            target = prog > 0.4 ? 1 : 0
+        }
+        withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.86)) {
+            dragDelta = 0
+            expandProgress = target
+            fullPlayerShown = target > 0.5
+        }
+    }
+
+    private func expandFullPlayer() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            dragDelta = 0
+            expandProgress = 1
+            fullPlayerShown = true
+        }
+    }
+
+    private func collapseFullPlayer() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            dragDelta = 0
+            expandProgress = 0
+            fullPlayerShown = false
         }
     }
 
