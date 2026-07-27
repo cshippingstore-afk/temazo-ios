@@ -142,6 +142,12 @@ struct MainScreen: View {
 
             if fullPlayerVisible, player.state.currentTrack != nil {
                 GeometryReader { geo in
+                    // Distancia de recorrido: desde la POSICIÓN del mini (bottom - miniHeight
+                    // - bottomNav) hasta el top de la pantalla. Así el FullPlayer "se levanta
+                    // desde el mini", no desde el fondo del screen.
+                    let bottomSafe = geo.safeAreaInsets.bottom
+                    let miniPlayerTopFromBottom: CGFloat = 68 + 60 + bottomSafe  // mini(≈68) + nav(≈60) + safe
+                    let travelDistance = geo.size.height - miniPlayerTopFromBottom
                     FullPlayer(
                         onClose: { collapseFullPlayer() },
                         onCoverClick: { collapseFullPlayer(); handleCoverClick() },
@@ -151,11 +157,15 @@ struct MainScreen: View {
                         onDragToCollapse: { dy in dragDelta = dy },
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
-                    // El FullPlayer desliza desde abajo según visibleExpandProgress.
-                    .offset(y: (1 - visibleExpandProgress) * geo.size.height)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    // progress=1 → offset=0 (top). progress=0 → offset=travelDistance (levantado desde el mini).
+                    .offset(y: (1 - visibleExpandProgress) * travelDistance)
+                    // Cuando el drag está a medio camino, el FullPlayer queda semi-transparente
+                    // para ver la app detrás. Al 100% expandido, opaco total.
+                    .opacity(min(1, visibleExpandProgress * 1.5 + 0.3))
                 }
-                .ignoresSafeArea()
                 .zIndex(10)
+                .allowsHitTesting(visibleExpandProgress > 0.5)  // solo interactúa cuando >50% expandido
             }
 
             if let txt = toastText {
@@ -175,8 +185,10 @@ struct MainScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: player.state.currentTrack != nil)
-        .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.85),
-                   value: expandProgress)
+        // Nota: NO animar expandProgress con .animation() global — los withAnimation
+        // explícitos en expandFullPlayer/collapseFullPlayer/commitDragSnap hacen el trabajo.
+        // Una animation global aquí interferiría con el drag continuo (que NO debe animar,
+        // debe seguir el dedo instantáneo).
         .animation(.easeInOut(duration: 0.2), value: toastText)
         .sheet(item: $addToPlaylistTrack) { t in
             AddToPlaylistSheet(
@@ -638,7 +650,8 @@ struct MainScreen: View {
         } else {
             target = prog > 0.4 ? 1 : 0
         }
-        withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.86)) {
+        // Spring rápido para snap tras drag — response bajo = "chasquido" limpio.
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
             dragDelta = 0
             expandProgress = target
             fullPlayerShown = target > 0.5
@@ -646,7 +659,7 @@ struct MainScreen: View {
     }
 
     private func expandFullPlayer() {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
             dragDelta = 0
             expandProgress = 1
             fullPlayerShown = true
@@ -654,7 +667,7 @@ struct MainScreen: View {
     }
 
     private func collapseFullPlayer() {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
             dragDelta = 0
             expandProgress = 0
             fullPlayerShown = false

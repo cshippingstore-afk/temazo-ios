@@ -52,6 +52,9 @@ struct FullPlayer: View {
                         .ignoresSafeArea()
 
                     VStack(spacing: 14) {
+                        // BETA v1.2.27: respetar safe area top para NO tapar notch.
+                        // topBar (chevron + REPRODUCIENDO + avatar) queda BAJO el status bar.
+                        Spacer().frame(height: geo.safeAreaInsets.top > 0 ? geo.safeAreaInsets.top : 8)
                         topBar(closeAction: onClose)
 
                         if showLyrics {
@@ -75,7 +78,7 @@ struct FullPlayer: View {
                             .padding(.vertical, 8)
 
                         bottomActions(isFav: isFav, track: t)
-                            .padding(.bottom, 24)
+                            .padding(.bottom, max(24, geo.safeAreaInsets.bottom + 12))
                     }
                 }
                 // Gestos Spotify:
