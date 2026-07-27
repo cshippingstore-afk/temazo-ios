@@ -11,9 +11,13 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.30'
+    MARKETING_VERSION: '1.2.31'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.31: Player FIX 3 problemas simultaneos: (1) salto al soltar - consolidar
+    # dragDelta en expandProgress antes de animar (offset visible no cambia en el
+    # transfer); (2) rebote - damping 0.95 sin oscilacion; (3) atasco - quitar
+    # allowsHitTesting condicional que interrumpia el gesture al cruzar 0.5
     # v1.2.30: Player fix "tatatata" al cerrar — quitar `if fullPlayerVisible` que
     # desmontaba/remontaba la vista durante la animacion; ahora siempre renderizada
     # cuando hay track (offset lo mueve fuera de pantalla cuando progress=0)

@@ -146,10 +146,10 @@ struct MainScreen: View {
                     .allowsHitTesting(visibleExpandProgress < 0.15)
             }
 
-            // BETA v1.2.30: FullPlayer SIEMPRE renderizado si hay track — NO usar
-            // if condition que lo desmonta/remonta durante la animación (causa
-            // "tatatata" al cerrar porque SwiftUI destruye la vista antes de que
-            // termine la animación de offset).
+            // BETA v1.2.31: FullPlayer SIEMPRE renderizado. Sin allowsHitTesting
+            // condicional (causaba interrupciones al cruzar el umbral 0.5 durante
+            // la animación de cierre). Cuando offset=screenHeight, el player está
+            // fuera de pantalla y no captura touches de forma natural.
             if player.state.currentTrack != nil {
                 GeometryReader { geo in
                     FullPlayer(
@@ -162,15 +162,10 @@ struct MainScreen: View {
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    // Cuando progress=0 → offset=screenHeight (invisible abajo).
-                    // Cuando progress=1 → offset=0 (fullscreen).
                     .offset(y: (1 - visibleExpandProgress) * geo.size.height)
                 }
                 .ignoresSafeArea()
                 .zIndex(10)
-                // Solo permite interactuar cuando está mayoritariamente expandido.
-                // Durante el drag, el gesto ya está activo y no depende de esto.
-                .allowsHitTesting(visibleExpandProgress > 0.5)
             }
 
             if let txt = toastText {
@@ -645,35 +640,44 @@ struct MainScreen: View {
 
     /// Snap final tras soltar el drag. Umbral 40% para completar, o velocity
     /// fuerte para abrir/cerrar directamente.
+    ///
+    /// CRÍTICO: consolidar el dragDelta en expandProgress ANTES de animar.
+    /// Si reseteas dragDelta=0 y a la vez expandProgress=target en el mismo
+    /// withAnimation, hay un frame donde el offset SALTA (porque dragDelta ya
+    /// es 0 pero expandProgress no ha llegado a target). El truco: primero
+    /// fijar expandProgress = visibleExpandProgress actual (sin animar) para
+    /// que el offset no cambie visualmente, después animar hasta el target.
     private func commitDragSnap(velocity: CGFloat, fromFull: Bool) {
-        let prog = visibleExpandProgress
+        let effective = visibleExpandProgress
         let target: CGFloat
         if velocity < -300 {
             target = 1
         } else if velocity > 300 {
             target = 0
         } else {
-            target = prog > 0.4 ? 1 : 0
+            target = effective > 0.4 ? 1 : 0
         }
-        // Spring rápido para snap tras drag — response bajo = "chasquido" limpio.
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-            dragDelta = 0
+        // Fase 1: consolidar sin animación (mismo offset visible, cambio de fuente).
+        expandProgress = effective
+        dragDelta = 0
+        // Fase 2: animar hasta el target. Damping alto (0.95) = sin rebote, ease-out.
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.95)) {
             expandProgress = target
             fullPlayerShown = target > 0.5
         }
     }
 
     private func expandFullPlayer() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
-            dragDelta = 0
+        dragDelta = 0
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.95)) {
             expandProgress = 1
             fullPlayerShown = true
         }
     }
 
     private func collapseFullPlayer() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
-            dragDelta = 0
+        dragDelta = 0
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.95)) {
             expandProgress = 0
             fullPlayerShown = false
         }
