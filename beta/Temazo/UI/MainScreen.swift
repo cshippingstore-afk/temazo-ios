@@ -146,7 +146,11 @@ struct MainScreen: View {
                     .allowsHitTesting(visibleExpandProgress < 0.15)
             }
 
-            if fullPlayerVisible, player.state.currentTrack != nil {
+            // BETA v1.2.30: FullPlayer SIEMPRE renderizado si hay track — NO usar
+            // if condition que lo desmonta/remonta durante la animación (causa
+            // "tatatata" al cerrar porque SwiftUI destruye la vista antes de que
+            // termine la animación de offset).
+            if player.state.currentTrack != nil {
                 GeometryReader { geo in
                     FullPlayer(
                         onClose: { collapseFullPlayer() },
@@ -158,13 +162,14 @@ struct MainScreen: View {
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    // BETA v1.2.28: vuelve a salir desde el fondo del screen (petición user).
-                    // Cuando progress=0 → offset=screenHeight (invisible fuera abajo).
+                    // Cuando progress=0 → offset=screenHeight (invisible abajo).
                     // Cuando progress=1 → offset=0 (fullscreen).
                     .offset(y: (1 - visibleExpandProgress) * geo.size.height)
                 }
                 .ignoresSafeArea()
                 .zIndex(10)
+                // Solo permite interactuar cuando está mayoritariamente expandido.
+                // Durante el drag, el gesto ya está activo y no depende de esto.
                 .allowsHitTesting(visibleExpandProgress > 0.5)
             }
 
