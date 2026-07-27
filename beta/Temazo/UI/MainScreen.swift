@@ -137,7 +137,13 @@ struct MainScreen: View {
                     .transition(.move(edge: .bottom))
                 }
 
+                // BETA v1.2.29 — bottomNav se oculta con el mismo drag Spotify:
+                // opacity fade + offset(y: progress * ~85pt) → se desliza fuera de pantalla.
+                // Cuando progress=0 → visible normal. progress=1 → oculto abajo.
                 bottomNav
+                    .opacity(1 - visibleExpandProgress)
+                    .offset(y: visibleExpandProgress * 90)
+                    .allowsHitTesting(visibleExpandProgress < 0.15)
             }
 
             if fullPlayerVisible, player.state.currentTrack != nil {
