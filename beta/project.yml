@@ -11,9 +11,13 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.31'
+    MARKETING_VERSION: '1.2.32'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.32: Player Spotify TRUE - emerge DESDE el mini (no fondo screen). Offset
+    # va de travelDistance (top FullPlayer = top mini) a 0 (fullscreen). Divisor de
+    # drag = travelDistance para proporcion 1:1 con el dedo. Mini + nav se ocultan
+    # sincronizados al mismo drag.
     # v1.2.31: Player FIX 3 problemas simultaneos: (1) salto al soltar - consolidar
     # dragDelta en expandProgress antes de animar (offset visible no cambia en el
     # transfer); (2) rebote - damping 0.95 sin oscilacion; (3) atasco - quitar

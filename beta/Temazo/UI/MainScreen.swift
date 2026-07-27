@@ -146,10 +146,10 @@ struct MainScreen: View {
                     .allowsHitTesting(visibleExpandProgress < 0.15)
             }
 
-            // BETA v1.2.31: FullPlayer SIEMPRE renderizado. Sin allowsHitTesting
-            // condicional (causaba interrupciones al cruzar el umbral 0.5 durante
-            // la animación de cierre). Cuando offset=screenHeight, el player está
-            // fuera de pantalla y no captura touches de forma natural.
+            // BETA v1.2.32: FullPlayer emerge DESDE la posición del mini player,
+            // no desde el fondo del screen. travelDistance = screenHeight - miniInset.
+            // Al progress=0, offset = travelDistance (top del FullPlayer donde está el mini).
+            // Al progress=1, offset = 0 (fullscreen).
             if player.state.currentTrack != nil {
                 GeometryReader { geo in
                     FullPlayer(
@@ -162,7 +162,7 @@ struct MainScreen: View {
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .offset(y: (1 - visibleExpandProgress) * geo.size.height)
+                    .offset(y: (1 - visibleExpandProgress) * travelDistance)
                 }
                 .ignoresSafeArea()
                 .zIndex(10)
@@ -622,14 +622,31 @@ struct MainScreen: View {
         }
     }
 
-    // MARK: - Spotify-style Player Expand (BETA v1.2.26)
+    // MARK: - Spotify-style Player Expand (BETA v1.2.32)
 
     private var screenHeight: CGFloat { UIScreen.main.bounds.height }
 
-    /// Progress efectivo mientras hay un drag. Combina el "estado final"
-    /// (expandProgress) con el delta del gesto en curso (dragDelta), clamped 0-1.
+    /// Altura combinada del mini player + bottomNav + safe area bottom. El
+    /// FullPlayer se posiciona con su TOP a esta distancia del bottom de la
+    /// pantalla cuando progress=0 (o sea, justo donde está el mini player).
+    /// Al progress=1 sube hasta cubrir toda la pantalla.
+    private var miniPlayerBottomInset: CGFloat {
+        // Mini player (~68) + BottomNav (~60) + safe area bottom (variable)
+        let safe = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.bottom ?? 34
+        return 68 + 60 + safe
+    }
+
+    /// Distancia que recorre el FullPlayer desde donde está el mini hasta el top.
+    private var travelDistance: CGFloat {
+        screenHeight - miniPlayerBottomInset
+    }
+
+    /// Progress efectivo mientras hay un drag. Divisor = travelDistance para
+    /// que el drag sea proporcional al recorrido real (no al screenHeight).
     private var visibleExpandProgress: CGFloat {
-        let deltaProg = -dragDelta / screenHeight
+        let deltaProg = -dragDelta / travelDistance
         return max(0, min(1, expandProgress + deltaProg))
     }
 
