@@ -55,9 +55,11 @@ struct SearchScreen: View {
                 Text("Escribe al menos 2 letras").foregroundStyle(.textLow).font(.system(size: 13))
                 Spacer()
             } else if tracks.isEmpty && artists.isEmpty && users.isEmpty {
-                Spacer()
-                Text("Sin resultados para \"\(query)\"").foregroundStyle(.textLow).font(.system(size: 13))
-                Spacer()
+                // BETA v1.2.33 — CTA "Solicitar" (paridad web + Android v1.0.5+)
+                ScrollView {
+                    NoResultsWithImportCta(query: query, showHeader: true)
+                        .padding(.top, 20)
+                }
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -89,6 +91,17 @@ struct SearchScreen: View {
                                     onTrackClick(t, tracks, idx)
                                 }
                             }
+                        }
+
+                        // BETA v1.2.33 — CTA "Solicitar" al final si no hay match exacto
+                        // del artista buscado (aunque haya otros resultados). Paridad
+                        // con el fix Android v1.0.5.
+                        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+                        let exactMatch = artists.contains { $0.name.lowercased() == q }
+                        if !exactMatch && q.count >= 2 {
+                            Spacer().frame(height: 16)
+                            NoResultsWithImportCta(query: query, showHeader: false)
+                            Spacer().frame(height: 16)
                         }
                     }
                     .padding(.horizontal, 8)

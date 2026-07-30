@@ -1,0 +1,115 @@
+name: TestFlight Public Link
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'get (obtener link existente) o create (crear nuevo)'
+        required: false
+        default: 'get'
+      limit:
+        description: 'Max testers (solo si action=create) 1-10000'
+        required: false
+        default: '100'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+      ACTION: ${{ inputs.action }}
+      LIMIT: ${{ inputs.limit }}
+    steps:
+      - name: Save p8
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$APPSTORE_API_KEY_P8" | sed 's/[[:space:]]*$//' > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+      - name: Get / Create public link
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 <<'PYEOF'
+          import jwt, time, requests, os, sys, json
+          key_id = os.environ['KEY_ID']; issuer_id = os.environ['ISSUER_ID']
+          action = os.environ.get('ACTION', 'get')
+          limit = int(os.environ.get('LIMIT', '100') or 100)
+          with open(f"/home/runner/private_keys/AuthKey_{key_id}.p8","rb") as f:
+              key = f.read()
+          tok = jwt.encode({"iss": issuer_id, "iat": int(time.time()),
+                            "exp": int(time.time())+900, "aud": "appstoreconnect-v1"},
+                           key, algorithm="ES256", headers={"kid": key_id})
+          H = {"Authorization": f"Bearer {tok}"}
+          BASE = "https://api.appstoreconnect.apple.com/v1"
+
+          # 1) App id
+          r = requests.get(f"{BASE}/apps", headers=H, params={"filter[bundleId]": "es.temazo.app.beta"})
+          apps = r.json().get("data", [])
+          if not apps:
+              print("App es.temazo.app.beta no encontrada"); sys.exit(1)
+          app_id = apps[0]["id"]
+
+          # 2) Grupos beta
+          r = requests.get(f"{BASE}/apps/{app_id}/betaGroups", headers=H)
+          groups = r.json().get("data", [])
+          print(f"\n=== Grupos beta de la app ===")
+          for g in groups:
+              a = g["attributes"]
+              print(f"  {g['id']}  '{a.get('name')}'  internal={a.get('isInternalGroup')}  publicLinkEnabled={a.get('publicLinkEnabled')}  publicLink={a.get('publicLink')}")
+
+          # 3) Elegir grupo — internal no soporta public link, así que buscamos external
+          # Si solo hay internal, hay que crear/convertir a external.
+          external = [g for g in groups if not g["attributes"].get("isInternalGroup")]
+          internal = [g for g in groups if g["attributes"].get("isInternalGroup")]
+          target = external[0] if external else None
+
+          if action == "get":
+              if target and target["attributes"].get("publicLink"):
+                  print(f"\n>>> PUBLIC LINK: {target['attributes']['publicLink']}")
+                  print(f"    Grupo: {target['attributes'].get('name')}  limit={target['attributes'].get('publicLinkLimit')}")
+              elif internal:
+                  print(f"\n>>> NO HAY LINK PÚBLICO existente.")
+                  print(f"    Los grupos existentes son INTERNAL (solo email invite).")
+                  print(f"    Ejecuta este workflow con action=create para crear un grupo external + public link.")
+              else:
+                  print(">>> No hay grupos ni con link.")
+              sys.exit(0)
+
+          # action == create
+          if target:
+              gid = target["id"]
+              # Habilitar public link si no lo está
+              if not target["attributes"].get("publicLinkEnabled"):
+                  patch = {"data": {"type": "betaGroups", "id": gid,
+                                    "attributes": {"publicLinkEnabled": True, "publicLinkLimitEnabled": True,
+                                                   "publicLinkLimit": limit}}}
+                  r = requests.patch(f"{BASE}/betaGroups/{gid}", headers=H, json=patch)
+                  print(f"  Enable public link → HTTP {r.status_code}")
+                  if r.status_code >= 300: print(r.text[:400])
+              # Refresh
+              r = requests.get(f"{BASE}/betaGroups/{gid}", headers=H)
+              upd = r.json()["data"]["attributes"]
+              print(f"\n>>> PUBLIC LINK: {upd.get('publicLink')}")
+              print(f"    Grupo: {upd.get('name')}  limit={upd.get('publicLinkLimit')}")
+          else:
+              # Crear grupo external con public link
+              body = {"data": {"type": "betaGroups",
+                               "attributes": {"name": "Temazo Beta Public",
+                                              "publicLinkEnabled": True,
+                                              "publicLinkLimitEnabled": True,
+                                              "publicLinkLimit": limit},
+                               "relationships": {"app": {"data": {"type": "apps", "id": app_id}}}}}
+              r = requests.post(f"{BASE}/betaGroups", headers=H, json=body)
+              print(f"  Create external group → HTTP {r.status_code}")
+              if r.status_code >= 300:
+                  print(r.text[:600]); sys.exit(1)
+              d = r.json()["data"]
+              print(f"\n>>> PUBLIC LINK: {d['attributes'].get('publicLink')}")
+              print(f"    Grupo: {d['attributes'].get('name')}  id={d['id']}  limit={d['attributes'].get('publicLinkLimit')}")
+              print("\n    IMPORTANTE: hay que asignar builds al nuevo grupo para que los")
+              print("    testers via link puedan instalar. Ejecuta assign-build-to-group.yml")
+              print("    con version=1.2.28 (o la más reciente) tras esto.")
+          PYEOF

@@ -103,6 +103,14 @@ final class TemazoAPI {
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) TemazoApp/1.0",
                      forHTTPHeaderField: "User-Agent")
 
+        // BETA v1.2.33: forzar respuesta fresca en búsquedas para que artistas
+        // recién importados aparezcan sin necesidad de reiniciar la app.
+        if path.contains("search.php") || path.contains("my_imports.php") {
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            req.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+            req.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        }
+
         if method == "POST" {
             if let form = form {
                 let body = form.map { "\($0.key)=\(percentEncode($0.value))" }.joined(separator: "&")
