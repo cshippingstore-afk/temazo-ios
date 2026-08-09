@@ -90,13 +90,13 @@ struct FullPlayer: View {
                 //  - Swipe ↓ colapsa el FullPlayer (continuo si parent gestiona)
                 //  - Swipe ←/→ (en el 75% superior) siguiente/anterior canción
                 //
-                // v1.2.37: la dirección (vertical vs horizontal) se decide en el
-                // PRIMER frame que supera el umbral y se MANTIENE durante todo el
-                // gesto. Antes se re-evaluaba cada frame con `abs(h)>abs(w)` y si
-                // el usuario arrastraba diagonalmente, algunos frames pasaban y
-                // otros no → dragDelta se congelaba y saltaba = trompicones.
+                // v1.2.38: .simultaneousGesture() — el drag del ROOT se procesa en
+                // paralelo con los gesture de los botones internos (play/pause,
+                // slider, cover), sin cancelarse. Antes con .gesture(), los frames
+                // del drag que pasaban por encima de un botón se ROBABAN al gesto
+                // interno → cortes de dragDelta → trompicones.
                 .contentShape(Rectangle())
-                .gesture(
+                .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .updating($gestureDirection) { val, state, _ in
                             if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
@@ -104,9 +104,6 @@ struct FullPlayer: View {
                             }
                         }
                         .onChanged { val in
-                            // Solo forwardear si el gesto empezó vertical.
-                            // Reportamos SIEMPRE el height sin restricciones — el
-                            // parent clamped a 0-1 con visibleExpandProgress.
                             if gestureDirection != .horizontal, let cb = onDragToCollapse {
                                 cb(max(0, val.translation.height))
                             }
@@ -121,7 +118,6 @@ struct FullPlayer: View {
                                 else if dx > 120 { player.prev() }
                                 return
                             }
-                            // Vertical (o modo not-set): snap con velocity
                             if let cb = onDragEnded {
                                 cb(vy)
                             } else if dy > 140 {

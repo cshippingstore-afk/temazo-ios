@@ -11,9 +11,13 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.37'
+    MARKETING_VERSION: '1.2.38'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.38: fix real trompicones al cerrar FullPlayer - .simultaneousGesture()
+    # en vez de .gesture() para que el drag NO compita con gestos internos
+    # (botones play/pause, slider progreso, cover tap). Antes cada vez que el
+    # dedo pasaba por encima de un boton, el drag se cortaba y saltaba.
     # v1.2.37: player drag hacia abajo tambien suave. Bug: el check direccional
     # (abs h > abs w) se evaluaba cada frame → gestos ligeramente diagonales
     # oscilaban entre pasa/no-pasa → dragDelta se congelaba y saltaba (trompicones).
