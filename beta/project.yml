@@ -11,9 +11,14 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.35'
+    MARKETING_VERSION: '1.2.36'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.36: player suave sin escalones - Transaction(disablesAnimations=true) en
+    # dragDelta setter + .animation(nil, value: dragDelta) para NO animar cambios
+    # del drag continuo (60fps sigue el dedo instantaneo). .animation(spring, value:
+    # expandProgress) mantiene el snap suave al soltar. Avatar artista 44pt + tap
+    # area extendida 56pt para tocar mas facil.
     # v1.2.35: FIX CRITICO player - offset volver a screenHeight (v1.2.32 uso
     # travelDistance que dejaba ~144pt del top FullPlayer visible al progress=0
     # -> bloqueaba interaccion). Ahora al progress=0 FullPlayer completamente

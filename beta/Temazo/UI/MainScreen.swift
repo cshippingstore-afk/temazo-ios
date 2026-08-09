@@ -129,8 +129,12 @@ struct MainScreen: View {
                         onArtistClick: handleArtistClick,
                         onAddToPlaylist: handleAddToPlaylist,
                         onLoadPlaylist: { showLoadPlaylist = true },
-                        // BETA v1.2.26 — Spotify-style drag interactivo
-                        onDragToExpand: { dy in dragDelta = dy },
+                        // v1.2.36: sin animación implícita en cada frame del drag
+                        onDragToExpand: { dy in
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { dragDelta = dy }
+                        },
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: false) }
                     )
                     .opacity(1 - visibleExpandProgress)  // fade out mientras se expande
@@ -146,11 +150,12 @@ struct MainScreen: View {
                     .allowsHitTesting(visibleExpandProgress < 0.15)
             }
 
-            // BETA v1.2.34: offset = (1 - progress) * screenHeight (no travelDistance).
-            // Al progress=0 → offset=screenHeight → FullPlayer completamente FUERA
-            // de pantalla por debajo (invisible). Al progress=1 → offset=0 → fullscreen.
-            // El bug v1.2.32 usaba travelDistance que dejaba ~144pt del top del
-            // FullPlayer visible al progress=0 → bloqueaba la interacción.
+            // BETA v1.2.36: offset = (1 - progress) * screenHeight.
+            // .animation(nil, value: dragDelta) → NO animar cambios del drag continuo
+            //   (los cambios de dragDelta son a 60fps, deben seguir el dedo instantáneo
+            //   sin spring implícito que causa el efecto "escalonado" a golpes).
+            // .animation(spring, value: expandProgress) → SÍ animar cambios del snap
+            //   final (expand/collapse) con spring suave.
             if player.state.currentTrack != nil {
                 GeometryReader { geo in
                     FullPlayer(
@@ -159,16 +164,21 @@ struct MainScreen: View {
                         onArtistClick: { collapseFullPlayer(); handleArtistClick() },
                         onAddToPlaylist: { handleAddToPlaylist() },
                         onLoadPlaylist: { showLoadPlaylist = true },
-                        onDragToCollapse: { dy in dragDelta = dy },
+                        onDragToCollapse: { dy in
+                            // Actualización SIN animation (drag continuo instantáneo).
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { dragDelta = dy }
+                        },
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
                     .offset(y: (1 - visibleExpandProgress) * geo.size.height)
+                    .animation(nil, value: dragDelta)
+                    .animation(.spring(response: 0.30, dampingFraction: 0.95), value: expandProgress)
                 }
                 .ignoresSafeArea()
                 .zIndex(10)
-                // Safety net: si progress > 0 pero <1 y no hay drag activo por
-                // más de 300ms, forzar snap. Evita quedarse en estado intermedio.
                 .allowsHitTesting(visibleExpandProgress > 0.5)
             }
 

@@ -139,13 +139,14 @@ struct FullPlayer: View {
                 .foregroundStyle(Color.textMid)
             Spacer()
             // Avatar circular del artista (réplica Android) → tap abre ArtistScreen.
-            // Reemplaza al icono "music.note.list" que está movido a bottomActions.
+            // v1.2.36: avatar más grande (44pt) + tap area extendida (56x56) para
+            // que sea más fácil de tocar sin fallar.
             Button {
                 if canGoArtist { onArtistClick() }
             } label: {
                 ZStack {
                     Circle().fill(Color.white.opacity(0.08))
-                    Circle().stroke(Color.neonPink.opacity(0.6), lineWidth: 1)
+                    Circle().stroke(Color.neonPink.opacity(0.6), lineWidth: 1.5)
                     if let raw = artistAvatarUrl, !raw.isEmpty,
                        let url = URL(string: raw.hasPrefix("http") ? raw
                                      : "https://temazo.es\(raw.hasPrefix("/") ? "" : "/")\(raw)") {
@@ -154,18 +155,20 @@ struct FullPlayer: View {
                                 img.resizable().scaledToFill()
                             } else {
                                 Text(initialChar)
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 16, weight: .bold))
                                     .foregroundStyle(.white)
                             }
                         }
                         .clipShape(Circle())
                     } else {
                         Text(initialChar)
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
                     }
                 }
-                .frame(width: 36, height: 36)
+                .frame(width: 44, height: 44)
+                .frame(width: 56, height: 56)   // hit area extendida (invisible)
+                .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(!canGoArtist)
