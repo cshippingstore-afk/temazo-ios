@@ -23,6 +23,9 @@ struct MiniPlayer: View {
     @EnvironmentObject var favorites: FavoritesRepo
     @State private var dragV: CGFloat = 0
     @State private var dragH: CGFloat = 0
+    // v1.2.37: dirección del gesto fija durante todo el drag (evita trompicones)
+    enum DragDirection { case unknown, vertical, horizontal }
+    @GestureState private var dragDirection: DragDirection = .unknown
 
     var body: some View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
@@ -136,33 +139,32 @@ struct MiniPlayer: View {
                 // Gestos: swipe vertical hacia arriba expande (Spotify-style continuo si
                 // hay callbacks del parent), swipe horizontal cambia canción.
                 .gesture(
-                    DragGesture(minimumDistance: 10)
+                    DragGesture(minimumDistance: 8)
+                        .updating($dragDirection) { val, state, _ in
+                            if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
+                                state = abs(val.translation.height) > abs(val.translation.width) ? .vertical : .horizontal
+                            }
+                        }
                         .onChanged { val in
                             dragV = val.translation.height
                             dragH = val.translation.width
-                            // Modo interactivo Spotify: mientras es predominantemente vertical
-                            // hacia arriba, delegamos al parent para expansión continua.
-                            if let cb = onDragToExpand,
-                               abs(val.translation.height) > abs(val.translation.width),
-                               val.translation.height < 0 {
-                                cb(val.translation.height)
+                            // Solo forward vertical (hacia arriba) al parent.
+                            // Dirección decidida al start, mantenida durante todo el drag → sin trompicones.
+                            if dragDirection != .horizontal, let cb = onDragToExpand {
+                                cb(min(0, val.translation.height))  // negativo = arriba
                             }
                         }
                         .onEnded { val in
                             let dx = val.translation.width
                             let dy = val.translation.height
                             let vy = val.predictedEndTranslation.height - dy
-                            if abs(dy) > abs(dx) {
-                                // vertical
-                                if let cb = onDragEnded {
-                                    cb(vy)  // Parent decide snap 0/1 según posición + velocity
-                                } else {
-                                    if dy < -80 { onExpand() }
-                                }
-                            } else {
-                                // horizontal → next/prev
+                            if dragDirection == .horizontal {
                                 if dx < -120 { player.next() }
                                 else if dx > 120 { player.prev() }
+                            } else {
+                                if let cb = onDragEnded {
+                                    cb(vy)
+                                } else if dy < -80 { onExpand() }
                             }
                             dragV = 0; dragH = 0
                         }

@@ -16,6 +16,11 @@ struct FullPlayer: View {
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
 
+    // v1.2.37: dirección del gesto (decidida en el primer frame que supera umbral,
+    // fija durante todo el drag para evitar trompicones diagonales).
+    enum GestureDirection { case unknown, vertical, horizontal }
+    @GestureState private var gestureDirection: GestureDirection = .unknown
+
     @State private var showLyrics = false
     @State private var lyrics: [LyricLine] = []
     @State private var seekValue: Double = 0
@@ -84,16 +89,26 @@ struct FullPlayer: View {
                 // Gestos Spotify:
                 //  - Swipe ↓ colapsa el FullPlayer (continuo si parent gestiona)
                 //  - Swipe ←/→ (en el 75% superior) siguiente/anterior canción
+                //
+                // v1.2.37: la dirección (vertical vs horizontal) se decide en el
+                // PRIMER frame que supera el umbral y se MANTIENE durante todo el
+                // gesto. Antes se re-evaluaba cada frame con `abs(h)>abs(w)` y si
+                // el usuario arrastraba diagonalmente, algunos frames pasaban y
+                // otros no → dragDelta se congelaba y saltaba = trompicones.
                 .contentShape(Rectangle())
                 .gesture(
-                    DragGesture(minimumDistance: 12)
+                    DragGesture(minimumDistance: 8)
+                        .updating($gestureDirection) { val, state, _ in
+                            if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
+                                state = abs(val.translation.height) > abs(val.translation.width) ? .vertical : .horizontal
+                            }
+                        }
                         .onChanged { val in
-                            // Modo interactivo Spotify: mientras es vertical hacia abajo,
-                            // el parent recibe delta y ajusta expandProgress 1→0.
-                            if let cb = onDragToCollapse,
-                               abs(val.translation.height) > abs(val.translation.width),
-                               val.translation.height > 0 {
-                                cb(val.translation.height)
+                            // Solo forwardear si el gesto empezó vertical.
+                            // Reportamos SIEMPRE el height sin restricciones — el
+                            // parent clamped a 0-1 con visibleExpandProgress.
+                            if gestureDirection != .horizontal, let cb = onDragToCollapse {
+                                cb(max(0, val.translation.height))
                             }
                         }
                         .onEnded { val in
@@ -101,19 +116,16 @@ struct FullPlayer: View {
                             let dy = val.translation.height
                             let startY = val.startLocation.y
                             let vy = val.predictedEndTranslation.height - dy
-                            // Vertical down
-                            if abs(dy) > abs(dx), dy > 0 {
-                                if let cb = onDragEnded {
-                                    cb(vy)  // parent decide snap
-                                } else if dy > 140 {
-                                    onClose()
-                                }
-                                return
-                            }
-                            // Horizontal — solo si empieza por encima del 75%
-                            if abs(dx) > abs(dy), startY < geo.size.height * 0.75 {
+                            if gestureDirection == .horizontal, startY < geo.size.height * 0.75 {
                                 if dx < -120 { player.next() }
                                 else if dx > 120 { player.prev() }
+                                return
+                            }
+                            // Vertical (o modo not-set): snap con velocity
+                            if let cb = onDragEnded {
+                                cb(vy)
+                            } else if dy > 140 {
+                                onClose()
                             }
                         }
                 )
