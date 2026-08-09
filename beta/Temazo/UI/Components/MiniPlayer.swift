@@ -138,7 +138,9 @@ struct MiniPlayer: View {
                 .onTapGesture { onExpand() }
                 // Gestos: swipe vertical hacia arriba expande (Spotify-style continuo si
                 // hay callbacks del parent), swipe horizontal cambia canción.
-                .gesture(
+                // v1.2.39: dos simultaneousGesture separados (paridad con FullPlayer).
+                // Vertical up = expand continuo. Horizontal = next/prev.
+                .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .updating($dragDirection) { val, state, _ in
                             if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
@@ -147,26 +149,29 @@ struct MiniPlayer: View {
                         }
                         .onChanged { val in
                             dragV = val.translation.height
-                            dragH = val.translation.width
-                            // Solo forward vertical (hacia arriba) al parent.
-                            // Dirección decidida al start, mantenida durante todo el drag → sin trompicones.
-                            if dragDirection != .horizontal, let cb = onDragToExpand {
-                                cb(min(0, val.translation.height))  // negativo = arriba
+                            // Solo vertical hacia arriba llama al expand
+                            if dragDirection == .vertical, val.translation.height < 0, let cb = onDragToExpand {
+                                cb(val.translation.height)
                             }
                         }
                         .onEnded { val in
-                            let dx = val.translation.width
                             let dy = val.translation.height
                             let vy = val.predictedEndTranslation.height - dy
-                            if dragDirection == .horizontal {
-                                if dx < -120 { player.next() }
-                                else if dx > 120 { player.prev() }
-                            } else {
-                                if let cb = onDragEnded {
-                                    cb(vy)
-                                } else if dy < -80 { onExpand() }
+                            if dragDirection == .vertical, dy < 0 {
+                                if let cb = onDragEnded { cb(vy) }
+                                else if dy < -80 { onExpand() }
                             }
-                            dragV = 0; dragH = 0
+                            dragV = 0
+                        }
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 30)
+                        .onEnded { val in
+                            let dx = val.translation.width
+                            let dy = val.translation.height
+                            guard abs(dx) > abs(dy) else { return }
+                            if dx < -80 { player.next() }
+                            else if dx > 80 { player.prev() }
                         }
                 )
             }

@@ -87,16 +87,16 @@ struct FullPlayer: View {
                     }
                 }
                 // Gestos Spotify:
-                //  - Swipe ↓ colapsa el FullPlayer (continuo si parent gestiona)
-                //  - Swipe ←/→ (en el 75% superior) siguiente/anterior canción
+                //  - Swipe ↓ colapsa el FullPlayer (continuo)
+                //  - Swipe ←/→ (arriba del 75%) siguiente/anterior canción
                 //
-                // v1.2.38: .simultaneousGesture() — el drag del ROOT se procesa en
-                // paralelo con los gesture de los botones internos (play/pause,
-                // slider, cover), sin cancelarse. Antes con .gesture(), los frames
-                // del drag que pasaban por encima de un botón se ROBABAN al gesto
-                // interno → cortes de dragDelta → trompicones.
+                // v1.2.39: dos .simultaneousGesture SEPARADOS — uno VERTICAL (drag
+                // continuo collapse) y otro HORIZONTAL (next/prev al soltar). No
+                // compiten entre sí (una direccion cada uno) y NO interfieren con
+                // los gestos internos (slider, botones) porque son simultaneous.
                 .contentShape(Rectangle())
                 .simultaneousGesture(
+                    // VERTICAL: drag hacia abajo → collapse continuo
                     DragGesture(minimumDistance: 8)
                         .updating($gestureDirection) { val, state, _ in
                             if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
@@ -104,25 +104,31 @@ struct FullPlayer: View {
                             }
                         }
                         .onChanged { val in
-                            if gestureDirection != .horizontal, let cb = onDragToCollapse {
-                                cb(max(0, val.translation.height))
+                            // Solo vertical hacia abajo llama al collapse
+                            if gestureDirection == .vertical, val.translation.height > 0, let cb = onDragToCollapse {
+                                cb(val.translation.height)
                             }
                         }
+                        .onEnded { val in
+                            let dy = val.translation.height
+                            let vy = val.predictedEndTranslation.height - dy
+                            if gestureDirection == .vertical, dy > 0 {
+                                if let cb = onDragEnded { cb(vy) }
+                                else if dy > 140 { onClose() }
+                            }
+                        }
+                )
+                .simultaneousGesture(
+                    // HORIZONTAL: swipe → next/prev (solo al soltar, si arriba 75%)
+                    DragGesture(minimumDistance: 30)
                         .onEnded { val in
                             let dx = val.translation.width
                             let dy = val.translation.height
                             let startY = val.startLocation.y
-                            let vy = val.predictedEndTranslation.height - dy
-                            if gestureDirection == .horizontal, startY < geo.size.height * 0.75 {
-                                if dx < -120 { player.next() }
-                                else if dx > 120 { player.prev() }
-                                return
-                            }
-                            if let cb = onDragEnded {
-                                cb(vy)
-                            } else if dy > 140 {
-                                onClose()
-                            }
+                            guard abs(dx) > abs(dy),
+                                  startY < geo.size.height * 0.75 else { return }
+                            if dx < -80 { player.next() }
+                            else if dx > 80 { player.prev() }
                         }
                 )
                 .task(id: t.id) { await loadLyrics(trackId: t.id) }
