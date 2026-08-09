@@ -89,7 +89,8 @@ final class TemazoAPI {
 
     private func request(_ path: String, query: [String: String?] = [:],
                          method: String = "GET",
-                         form: [String: String]? = nil) -> URLRequest {
+                         form: [String: String]? = nil,
+                         json: [String: Any]? = nil) -> URLRequest {
         var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         let items = query.compactMap { k, v -> URLQueryItem? in
             guard let v = v else { return nil }
@@ -112,7 +113,11 @@ final class TemazoAPI {
         }
 
         if method == "POST" {
-            if let form = form {
+            if let json = json,
+               let data = try? JSONSerialization.data(withJSONObject: json) {
+                req.httpBody = data
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            } else if let form = form {
                 let body = form.map { "\($0.key)=\(percentEncode($0.value))" }.joined(separator: "&")
                 req.httpBody = body.data(using: .utf8)
                 req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -704,9 +709,11 @@ final class TemazoAPI {
 
     @discardableResult
     func requestImport(type: String, artistName: String, trackTitle: String? = nil) async throws -> ImportRequestResponse {
-        var form: [String: String] = ["type": type, "artist_name": artistName]
-        if let t = trackTitle { form["track_title"] = t }
-        let req = request("api/request_import.php", method: "POST", form: form)
+        // v1.2.34: endpoint espera JSON en body (json_decode de php://input),
+        // NO form-urlencoded. Antes fallaba con "bad_request / JSON inválido".
+        var body: [String: Any] = ["type": type, "artist_name": artistName]
+        if let t = trackTitle { body["track_title"] = t }
+        let req = request("api/request_import.php", method: "POST", json: body)
         return try await send(req, ImportRequestResponse.self)
     }
 

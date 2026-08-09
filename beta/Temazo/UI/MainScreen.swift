@@ -190,6 +190,19 @@ struct MainScreen: View {
         // Una animation global aquí interferiría con el drag continuo (que NO debe animar,
         // debe seguir el dedo instantáneo).
         .animation(.easeInOut(duration: 0.2), value: toastText)
+        // BETA v1.2.34: al navegar (cualquier cambio de stack o de tab), colapsar el
+        // FullPlayer si estaba abierto o semi-abierto. Evita el bug donde el player
+        // queda superpuesto con offset intermedio al abrir una playlist/artist.
+        .onChange(of: detailStack.count) { _, _ in
+            if expandProgress > 0.001 || dragDelta != 0 {
+                collapseFullPlayer()
+            }
+        }
+        .onChange(of: tab) { _, _ in
+            if expandProgress > 0.001 || dragDelta != 0 {
+                collapseFullPlayer()
+            }
+        }
         .sheet(item: $addToPlaylistTrack) { t in
             AddToPlaylistSheet(
                 trackId: t.id,
