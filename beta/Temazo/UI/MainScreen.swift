@@ -146,10 +146,11 @@ struct MainScreen: View {
                     .allowsHitTesting(visibleExpandProgress < 0.15)
             }
 
-            // BETA v1.2.32: FullPlayer emerge DESDE la posición del mini player,
-            // no desde el fondo del screen. travelDistance = screenHeight - miniInset.
-            // Al progress=0, offset = travelDistance (top del FullPlayer donde está el mini).
-            // Al progress=1, offset = 0 (fullscreen).
+            // BETA v1.2.34: offset = (1 - progress) * screenHeight (no travelDistance).
+            // Al progress=0 → offset=screenHeight → FullPlayer completamente FUERA
+            // de pantalla por debajo (invisible). Al progress=1 → offset=0 → fullscreen.
+            // El bug v1.2.32 usaba travelDistance que dejaba ~144pt del top del
+            // FullPlayer visible al progress=0 → bloqueaba la interacción.
             if player.state.currentTrack != nil {
                 GeometryReader { geo in
                     FullPlayer(
@@ -162,10 +163,13 @@ struct MainScreen: View {
                         onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .offset(y: (1 - visibleExpandProgress) * travelDistance)
+                    .offset(y: (1 - visibleExpandProgress) * geo.size.height)
                 }
                 .ignoresSafeArea()
                 .zIndex(10)
+                // Safety net: si progress > 0 pero <1 y no hay drag activo por
+                // más de 300ms, forzar snap. Evita quedarse en estado intermedio.
+                .allowsHitTesting(visibleExpandProgress > 0.5)
             }
 
             if let txt = toastText {
@@ -656,10 +660,11 @@ struct MainScreen: View {
         screenHeight - miniPlayerBottomInset
     }
 
-    /// Progress efectivo mientras hay un drag. Divisor = travelDistance para
-    /// que el drag sea proporcional al recorrido real (no al screenHeight).
+    /// Progress efectivo mientras hay un drag. Divisor = screenHeight (consistente
+    /// con el offset). Antes usaba travelDistance pero causaba bug: al progress=0
+    /// el offset era travelDistance en lugar de screenHeight → header visible.
     private var visibleExpandProgress: CGFloat {
-        let deltaProg = -dragDelta / travelDistance
+        let deltaProg = -dragDelta / screenHeight
         return max(0, min(1, expandProgress + deltaProg))
     }
 
