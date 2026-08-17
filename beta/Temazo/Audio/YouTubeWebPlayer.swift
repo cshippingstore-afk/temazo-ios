@@ -95,18 +95,24 @@ final class YouTubeWebPlayer: NSObject, ObservableObject {
         config.userContentController.add(BridgeReceiver(owner: self), name: "temazoPlayer")
 
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
-        wv.isHidden = true
+        // CRÍTICO: NO usar isHidden=true — iOS pausa audio de WebViews ocultos del
+        // render tree. Usamos alpha muy bajo + fuera de pantalla + no interactivo.
+        wv.alpha = 0.01
         wv.isUserInteractionEnabled = false
         wv.navigationDelegate = self
         wv.scrollView.isScrollEnabled = false
-        // 1×1 pero MONTADO en la jerarquía (obligatorio para audio-in-background).
-        parent.addSubview(wv)
+        // 1×1 pero MONTADO en la jerarquía y con alpha visible (mín) para que
+        // iOS no lo trate como offscreen y siga sirviendo audio.
+        // insertSubview at:0 → detrás de todo el contenido SwiftUI (que no
+        // intercepte gestos accidentalmente).
+        parent.insertSubview(wv, at: 0)
         wv.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             wv.widthAnchor.constraint(equalToConstant: 1),
             wv.heightAnchor.constraint(equalToConstant: 1),
-            wv.topAnchor.constraint(equalTo: parent.topAnchor, constant: -100),
-            wv.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: -100),
+            // dentro del bounds pero en la esquina inferior derecha (invisible al user)
+            wv.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -2),
+            wv.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: -2),
         ])
 
         self.webView = wv
@@ -198,6 +204,10 @@ final class YouTubeWebPlayer: NSObject, ObservableObject {
             if d > 0.5 { durationSec = d }
             onCurrentTime?(t, d)
 
+        case "log":
+            let m = msg["msg"] as? String ?? ""
+            print("[YTWebPlayer JS] \(m)")
+
         default:
             break
         }
@@ -221,6 +231,7 @@ final class YouTubeWebPlayer: NSObject, ObservableObject {
         var player = null;
         var pendingId = null;
         var pendingAutoplay = true;
+        var didUnlock = false;
 
         function post(obj) {
           try {
@@ -228,7 +239,10 @@ final class YouTubeWebPlayer: NSObject, ObservableObject {
           } catch (e) {}
         }
 
+        function log(msg) { post({event: 'log', msg: String(msg).substring(0, 300)}); }
+
         function onYouTubeIframeAPIReady() {
+          log('iframe API loaded');
           player = new YT.Player('player', {
             height: '100%',
             width: '100%',
@@ -242,28 +256,60 @@ final class YouTubeWebPlayer: NSObject, ObservableObject {
               modestbranding: 1,
               playsinline: 1,
               rel: 0,
-              origin: 'https://www.youtube.com'
+              origin: 'https://www.youtube.com',
+              enablejsapi: 1
             },
             events: {
               onReady: function() {
+                log('player onReady');
+                // iOS autoplay unlock: setVolume + unMute explícito para que si
+                // iOS bloqueó el sonido por autoplay-sin-touch, se restaure.
+                try { player.setVolume(100); } catch (e) {}
+                try { player.unMute(); } catch (e) {}
                 post({event: 'ready'});
                 if (pendingId) {
                   loadVideo(pendingId, pendingAutoplay);
                   pendingId = null;
                 }
               },
-              onStateChange: function(e) { post({event: 'state', state: e.data}); },
-              onError: function(e) { post({event: 'error', code: e.data}); }
+              onStateChange: function(e) {
+                log('state=' + e.data);
+                post({event: 'state', state: e.data});
+                // Cada state change: reforzar unMute + volumen (iOS puede resetear)
+                if (e.data === 1 || e.data === 3) {
+                  try { player.unMute(); player.setVolume(100); } catch (err) {}
+                }
+              },
+              onError: function(e) {
+                log('error=' + e.data);
+                post({event: 'error', code: e.data});
+              }
             }
           });
         }
 
         function loadVideo(id, autoplay) {
           if (!player || !player.loadVideoById) {
+            log('load pending (player not ready)');
             pendingId = id; pendingAutoplay = autoplay; return;
           }
-          if (autoplay) player.loadVideoById(id);
-          else player.cueVideoById(id);
+          log('loadVideoById ' + id + ' autoplay=' + autoplay);
+          try { player.unMute(); player.setVolume(100); } catch (e) {}
+          if (autoplay) {
+            player.loadVideoById(id);
+            // iOS a veces necesita 2º kick 200ms después para arrancar
+            setTimeout(function() {
+              try {
+                if (player.getPlayerState && player.getPlayerState() !== 1) {
+                  player.unMute();
+                  player.setVolume(100);
+                  player.playVideo();
+                }
+              } catch (e) {}
+            }, 300);
+          } else {
+            player.cueVideoById(id);
+          }
         }
 
         // Poll cada 500ms para reportar currentTime + duration

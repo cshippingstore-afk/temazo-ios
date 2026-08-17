@@ -11,9 +11,20 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.43'
+    MARKETING_VERSION: '1.2.44'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.44: fixes WKWebView v1.2.43. Reportes user: (1) offline OK, background
+    # OK sobre descargadas; (2) YouTube iframe timer avanza pero SIN audio; (3)
+    # FullPlayer no se expande desde el mini.
+    # FIXES:
+    # - WebView: quitar isHidden=true (iOS pausa audio de WebViews ocultos del
+    #   render tree). Ahora alpha=0.01 + insertSubview at:0 (detrás de todo el
+    #   contenido SwiftUI, no intercepta gestos).
+    # - JS autoplay unlock: unMute() + setVolume(100) en onReady + repetir en
+    #   cada state change (iOS resetea volume). Segundo playVideo() kick tras
+    #   300ms si getPlayerState != 1.
+    # - Log JS -> Swift para diagnostico ("[YTWebPlayer JS] iframe API loaded"...)
     # v1.2.43: reproduccion INSTANT via WKWebView + iframe YouTube (como version
     # web/Android). Backend por defecto = WebView (Google CDN directo, 0 proxy).
     # Nuevo YouTubeWebPlayer.swift wraps WKWebView 1x1 invisible + JS bridge para
