@@ -11,12 +11,25 @@ import MediaPlayer
 ///
 /// Resultado: AVPlayer reproduce un stream desde temazo.es → background audio funciona
 /// nativamente, igual que Spotify/Apple Music.
+/// Backend activo para la reproducción del track actual.
+///  - webView: WKWebView + iframe YouTube (default, instant, sin proxy)
+///  - avPlayer: AVPlayer clásico (fallback cuando el video bloquea embed
+///    o cuando hay descarga offline local)
+enum PlayerBackend: String {
+    case webView
+    case avPlayer
+}
+
 @MainActor
 final class Player: NSObject, ObservableObject {
     static let shared = Player()
     @Published var state = PlayerState()
 
     private static let proxyBase = "https://temazo.es/api/yt_proxy.php"
+
+    /// Backend actualmente reproduciendo. Se establece en startPlayback y se usa
+    /// para dispatch de play/pause/seek/etc al player correcto.
+    private var backend: PlayerBackend = .webView
 
     private var avPlayer: AVPlayer?
     private var statusObs: NSKeyValueObservation?
@@ -29,9 +42,76 @@ final class Player: NSObject, ObservableObject {
     /// detector manual via positionSec ≥ durationSec - 0.4s.
     private var didAutoNext: Bool = false
 
+    /// v1.2.43: contador de intentos WebView por track. Si el iframe reporta
+    /// error 101/150 (embed disabled), no reintentamos infinito — pasamos a
+    /// AVPlayer + yt_proxy inmediatamente.
+    private var webViewAttempts: [String: Int] = [:]
+
     override init() {
         super.init()
         UIApplication.shared.beginReceivingRemoteControlEvents()
+        setupWebViewCallbacks()
+    }
+
+    /// Registra los callbacks del YouTubeWebPlayer una sola vez. Los eventos
+    /// del iframe (state change, error, ended, current time) se traducen a
+    /// mutaciones de `PlayerState` idénticas a las que hace el observer de AVPlayer.
+    private func setupWebViewCallbacks() {
+        let yt = YouTubeWebPlayer.shared
+
+        yt.onStateChange = { [weak self] s in
+            guard let self else { return }
+            // YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
+            switch s {
+            case 1:
+                self.state.isPlaying = true
+                self.state.ready = true
+                self.state.loadingState = .playing
+            case 2:
+                self.state.isPlaying = false
+            case 3:
+                self.state.loadingState = .stalled  // buffering visualmente = stalled
+            case 5:
+                self.state.loadingState = .ready
+            case 0:
+                self.state.isPlaying = false
+                self.state.loadingState = .ready
+            default:
+                break
+            }
+        }
+
+        yt.onError = { [weak self] code in
+            guard let self else { return }
+            // Solo actuamos si el error es del track ACTUALMENTE reproduciéndose
+            // en modo webView (no de un load stale que llegó tarde).
+            guard self.backend == .webView,
+                  let track = self.state.currentTrack,
+                  let yt = track.youtubeId,
+                  YouTubeWebPlayer.shared.currentVideoId == yt else { return }
+
+            print("[Player] webView error code=\(code) for \(yt) → fallback AVPlayer")
+            // Fallback inmediato al AVPlayer + yt_proxy. Marcamos el track como
+            // "intentado en webView" para no volver a intentarlo esta sesión.
+            self.webViewAttempts[yt] = (self.webViewAttempts[yt] ?? 0) + 1
+            self.startAVPlayback(for: track)
+        }
+
+        yt.onEnded = { [weak self] in
+            guard let self, self.backend == .webView else { return }
+            if !self.didAutoNext {
+                self.didAutoNext = true
+                self.next()
+            }
+        }
+
+        yt.onCurrentTime = { [weak self] cur, dur in
+            guard let self, self.backend == .webView else { return }
+            self.state.positionSec = Float(cur)
+            if dur > 0.5 {
+                self.state.durationSec = Float(dur)
+            }
+        }
     }
 
     func playTrack(_ track: Track, queue: [Track], index: Int, source: String? = nil) {
@@ -47,7 +127,7 @@ final class Player: NSObject, ObservableObject {
         state.loadingState = .extracting
         didAutoNext = false
         AudioSessionManager.shared.ensureActive()
-        startAVPlayback(for: track)
+        startPlayback(for: track)
         prewarmNext()
         Task { try? await TemazoAPI.shared.historyAdd(track.id) }
     }
@@ -74,13 +154,19 @@ final class Player: NSObject, ObservableObject {
 
     func resume() {
         AudioSessionManager.shared.ensureActive()
-        avPlayer?.play()
+        switch backend {
+        case .webView: YouTubeWebPlayer.shared.play()
+        case .avPlayer: avPlayer?.play()
+        }
         state.isPlaying = true
     }
 
     func pause() {
-        print("[Player] pause() called")
-        avPlayer?.pause()
+        print("[Player] pause() called backend=\(backend.rawValue)")
+        switch backend {
+        case .webView: YouTubeWebPlayer.shared.pause()
+        case .avPlayer: avPlayer?.pause()
+        }
         state.isPlaying = false
     }
 
@@ -101,7 +187,7 @@ final class Player: NSObject, ObservableObject {
             state.durationSec = Float(t.durationSec ?? 0)
             state.loadingState = .extracting
             didAutoNext = false
-            startAVPlayback(for: t)
+            startPlayback(for: t)
             Task { try? await TemazoAPI.shared.historyAdd(t.id) }
             return
         }
@@ -165,14 +251,20 @@ final class Player: NSObject, ObservableObject {
     }
 
     func seekTo(seconds: Float) {
-        guard let p = avPlayer else { return }
-        let cm = CMTime(seconds: Double(seconds), preferredTimescale: 600)
-        p.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
+        switch backend {
+        case .webView:
+            YouTubeWebPlayer.shared.seek(seconds: Double(seconds))
+        case .avPlayer:
+            guard let p = avPlayer else { return }
+            let cm = CMTime(seconds: Double(seconds), preferredTimescale: 600)
+            p.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         state.positionSec = seconds
     }
 
     func stopAll() {
         teardownObservers()
+        YouTubeWebPlayer.shared.stop()
         avPlayer?.pause()
         avPlayer?.replaceCurrentItem(with: nil)
         avPlayer = nil
@@ -181,7 +273,48 @@ final class Player: NSObject, ObservableObject {
 
     func setCrossfadeMs(_ ms: Int) { crossfadeMs = max(150, min(6000, ms)) }
 
-    // MARK: - AVPlayer streaming desde el proxy backend
+    // MARK: - Dispatcher (v1.2.43: WebView first, AVPlayer fallback)
+
+    /// Estrategia v1.2.43:
+    ///   1. Si hay archivo offline descargado → AVPlayer local (preserves feature)
+    ///   2. Sino → WebView iframe YouTube (instant, sin proxy)
+    ///   3. Si WebView reporta embed disabled (101/150) → callback dispara startAVPlayback
+    ///      → AVPlayer + yt_proxy como fallback silencioso
+    private func startPlayback(for track: Track) {
+        guard let ytId = track.youtubeId, !ytId.isEmpty else {
+            state.lastError = "no youtubeId"; state.loadingState = .failed
+            print("[Player] no youtubeId for track id=\(track.id)"); return
+        }
+
+        // Path 1: offline local (mantiene AVPlayer + AirPlay + calidad garantizada)
+        if let localURL = OfflineLibrary.shared.localURL(for: ytId) {
+            print("[Player] offline hit \(ytId)")
+            backend = .avPlayer
+            startWithURL(localURL, track: track, source: "offline-download")
+            return
+        }
+
+        // Path 2: si este track ya falló antes en WebView (embed disabled) esta sesión,
+        // no volvemos a intentar iframe — directamente a AVPlayer + yt_proxy.
+        if (webViewAttempts[ytId] ?? 0) > 0 {
+            print("[Player] webView previously failed for \(ytId) → AVPlayer directo")
+            startAVPlayback(for: track)
+            return
+        }
+
+        // Path 3 (default v1.2.43): WebView iframe YouTube — instant.
+        // Si el iframe reporta error 101/150, el callback onError disparará
+        // startAVPlayback automáticamente para este track.
+        backend = .webView
+        // Pausar AVPlayer si venía sonando de un track previo por AVPlayer
+        avPlayer?.pause()
+        teardownObservers()
+        state.loadingState = .extracting
+        state.source = "webview-iframe"
+        YouTubeWebPlayer.shared.load(videoId: ytId, autoplay: true)
+    }
+
+    // MARK: - AVPlayer streaming (fallback + offline)
 
     private func startAVPlayback(for track: Track) {
         guard let ytId = track.youtubeId, !ytId.isEmpty else {
@@ -189,33 +322,28 @@ final class Player: NSObject, ObservableObject {
             print("[Player] no youtubeId for track id=\(track.id)"); return
         }
 
+        backend = .avPlayer
+        // Silenciar WebView si venía sonando
+        YouTubeWebPlayer.shared.stop()
+
         // BETA v1.2.19: PRIORIDAD MÁXIMA archivo local descargado.
-        // ÚNICO cambio respecto al Player de la estable.
-        // Si el user descargó esta canción, la reproducimos desde disco.
         if let localURL = OfflineLibrary.shared.localURL(for: ytId) {
             print("[Player] offline hit \(ytId)")
             startWithURL(localURL, track: track, source: "offline-download")
             return
         }
 
-        // Estrategia v2.26 (vuelta a AVPlayer tras experimento WKWebView fallido):
-        // PRIORIDAD ABSOLUTA al extractor local — extrae la URL desde el iPhone del
-        // user, usa SU IP (no la del VPS), sin throttle de YouTube. El proxy yt_proxy
-        // está rate-limited a 29 KB/s desde la IP del VPS.
-        //
-        // Orden:
+        // Estrategia clásica AVPlayer (fallback cuando WebView falla):
         //   1. Cache hit del extractor → instantáneo
-        //   2. Esperar al extractor live (timeout 8s) — esta es la ruta normal ahora
-        //   3. Si extractor falla → fallback al proxy (lento por throttle pero suena)
+        //   2. Esperar al extractor live (timeout 8s)
+        //   3. Si extractor falla → fallback al proxy yt_proxy (lento pero funciona)
 
-        // Paso 1: cache hit instantáneo
         if let cached = YouTubeExtractor.shared.cachedURL(for: ytId) {
             startWithURL(cached, track: track, source: "extractor-cache")
             TemazoAPI.shared.prefetchYouTubeURLs([ytId])
             return
         }
 
-        // Paso 2 + 3: extractor live primero, proxy como fallback
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             let stillCurrent = { self.state.currentTrack?.id == track.id }
@@ -228,7 +356,6 @@ final class Player: NSObject, ObservableObject {
                 return
             }
 
-            // Fallback: proxy 302 (throttled pero funciona)
             guard stillCurrent() else { return }
             guard let proxyURL = self.buildProxyURL(ytId: ytId) else {
                 self.state.lastError = "no url"; self.state.loadingState = .failed

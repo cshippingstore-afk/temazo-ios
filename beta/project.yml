@@ -11,9 +11,25 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.42'
+    MARKETING_VERSION: '1.2.43'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.43: reproduccion INSTANT via WKWebView + iframe YouTube (como version
+    # web/Android). Backend por defecto = WebView (Google CDN directo, 0 proxy).
+    # Nuevo YouTubeWebPlayer.swift wraps WKWebView 1x1 invisible + JS bridge para
+    # play/pause/seek/state/currentTime. Player.swift refactorizado con PlayerBackend
+    # enum: .webView (default) o .avPlayer (fallback embed-disabled + offline).
+    # Estrategia startPlayback:
+    #   1. Si track offline descargado -> AVPlayer local (preserves AirPlay/lockscreen)
+    #   2. Sino -> WebView iframe (instant, ~0s)
+    #   3. Si iframe error 101/150 (embed disabled por label: Universal/Bad Bunny)
+    #      -> callback dispara startAVPlayback -> yt_proxy fallback
+    #   4. Track marcado como "webView failed" no reintenta iframe esta sesion
+    # Background audio: WKWebView.config.allowsInlineMediaPlayback + AudioSession
+    # .playback + WebView en view hierarchy (attach() en TemazoApp.task). Confirmado
+    # con SoundCloud/Musi que usan mismo approach.
+    # BACKUP: git tag v1.2.42-pre-webview + copia _pre_webview_backup/ local para
+    # rollback en 30s si algo va mal.
     # v1.2.42: buildProxyURL envia ?next=id1,id2,id3 con los siguientes 3 tracks
     # de la cola actual. El backend (yt_proxy.php v6, ya deployado) dispara
     # descargas background de esos tracks tras servir el actual — cuando el

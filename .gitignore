@@ -28,3 +28,4 @@ ExportOptions.plist
 
 # Node leftovers (legacy)
 node_modules/
+_pre_webview_backup/

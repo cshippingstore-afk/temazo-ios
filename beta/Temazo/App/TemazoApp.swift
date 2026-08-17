@@ -20,6 +20,14 @@ struct TemazoApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     NowPlayingManager.shared.bind(to: player)
+                    // v1.2.43: montar el WKWebView del YouTubeWebPlayer en la view
+                    // hierarchy (1×1 invisible). Requisito iOS para que el iframe
+                    // YouTube pueda reproducir audio en background.
+                    if let window = UIApplication.shared.connectedScenes
+                        .compactMap({ $0 as? UIWindowScene })
+                        .first?.windows.first {
+                        YouTubeWebPlayer.shared.attach(to: window)
+                    }
                     await auth.refreshSession()
                     // BETA v1.0.0: killer feature — auto-download al marcar favorito.
                     // FavoritesRepo dispara este callback cuando alguien pasa un track
