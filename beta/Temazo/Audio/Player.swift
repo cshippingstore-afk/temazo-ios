@@ -357,8 +357,41 @@ final class Player: NSObject, ObservableObject {
 
     private func buildProxyURL(ytId: String) -> URL? {
         var comps = URLComponents(string: Self.proxyBase)
-        comps?.queryItems = [URLQueryItem(name: "id", value: ytId)]
+        var items = [URLQueryItem(name: "id", value: ytId)]
+        // v6 backend: si enviamos ?next=id1,id2,id3 el proxy pre-descarga esos
+        // tracks en background tras servir el actual → siguientes tracks
+        // cache-hit (~0.1s) cuando el user pulsa siguiente.
+        let nextIds = nextQueuedYoutubeIds(count: 3)
+        if !nextIds.isEmpty {
+            items.append(URLQueryItem(name: "next", value: nextIds.joined(separator: ",")))
+        }
+        comps?.queryItems = items
         return comps?.url
+    }
+
+    /// Devuelve los youtube_id de los próximos N tracks de la cola actual
+    /// (partiendo del índice actual + 1). Skip tracks sin youtube_id.
+    /// Con repeatMode==1 (playlist en loop) puede envolver una vez al principio.
+    private func nextQueuedYoutubeIds(count: Int) -> [String] {
+        var out: [String] = []
+        let q = state.queue
+        guard !q.isEmpty, count > 0 else { return out }
+        // Máx pasos = q.count (evita loops infinitos con listas sin youtube_id)
+        for offset in 1...q.count {
+            var idx = state.index + offset
+            if idx >= q.count {
+                if state.repeatMode == 1 {
+                    idx = idx % q.count
+                } else {
+                    break
+                }
+            }
+            if let yt = q[idx].youtubeId, yt.count == 11 {
+                out.append(yt)
+                if out.count >= count { break }
+            }
+        }
+        return out
     }
 
     private func teardownObservers() {
