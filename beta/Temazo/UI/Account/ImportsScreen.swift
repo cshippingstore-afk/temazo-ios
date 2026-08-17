@@ -92,6 +92,18 @@ struct ImportsScreen: View {
             }
         }
         .task { await reload() }
+        // Auto-refresh cada 20s solo si hay items no-terminales (pending/searching/importing).
+        // Se re-lanza cada vez que cambia `mine` (nuevo item o transición de estado).
+        .task(id: mine.map(\.status).joined(separator: ",")) {
+            let hasPending = mine.contains { ["pending","searching","importing"].contains($0.status) }
+            guard hasPending else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if Task.isCancelled { break }
+                await reload()
+                if !mine.contains(where: { ["pending","searching","importing"].contains($0.status) }) { break }
+            }
+        }
         .sheet(isPresented: $showCreate) {
             NewImportSheet { type, artist, track in
                 showCreate = false

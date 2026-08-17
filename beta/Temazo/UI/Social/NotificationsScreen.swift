@@ -7,6 +7,9 @@ struct NotificationsScreen: View {
     let onBack: () -> Void
     let onOpenUser: (Int64, String?) -> Void
     let onOpenTrack: (Int64) -> Void
+    /// Callback opcional para abrir un artista tras tap en notif (import_artist_done).
+    /// Se pasa nil desde callers legacy; los nuevos deep-links lo aprovechan.
+    var onOpenArtist: ((Int64) -> Void)? = nil
 
     @ObservedObject private var repo = NotificationsRepo.shared
     @State private var loading = false
@@ -96,7 +99,11 @@ struct NotificationsScreen: View {
     private func handleTap(_ n: TemazoNotification) {
         if let actor = n.actor_id, n.kind == "follow" || n.kind == "user_followed" {
             onOpenUser(actor, n.actor_username)
-        } else if n.kind == "recommend", let tid = n.target_id {
+        } else if n.kind == "recommend" || n.kind == "track_recommend", let tid = n.target_id {
+            onOpenTrack(tid)
+        } else if n.kind == "import_artist_done", let aid = n.target_id {
+            onOpenArtist?(aid)
+        } else if n.kind == "import_track_done", let tid = n.target_id {
             onOpenTrack(tid)
         }
     }
@@ -111,10 +118,26 @@ struct NotificationsScreen: View {
         let user = n.actor_username ?? "Alguien"
         switch n.kind {
         case "follow", "user_followed": return "\(user) te empezó a seguir"
-        case "recommend": return "\(user) te recomendó una canción"
+        case "recommend", "track_recommend": return "\(user) te recomendó una canción"
         case "playlist_added", "playlist_collab_added": return "\(user) añadió canciones a una playlist colaborativa"
         case "playlist_followed": return "\(user) sigue tu playlist"
+        case "import_artist_done":
+            let name = payloadName(n)
+            return name.isEmpty ? "Tu artista pedido ya está en Temazo" : "Ya tenemos a \(name) en Temazo"
+        case "import_track_done":
+            let name = payloadName(n)
+            return name.isEmpty ? "Tu canción pedida ya está en Temazo" : "Ya tenemos «\(name)» en Temazo"
         default: return "\(user) interactuó contigo"
         }
+    }
+
+    /// Extrae `name` del payload JSON (backend guarda {"name":"..."} en import_*_done).
+    private func payloadName(_ n: TemazoNotification) -> String {
+        guard let p = n.payload,
+              let data = p.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = obj["name"] as? String
+        else { return "" }
+        return name
     }
 }

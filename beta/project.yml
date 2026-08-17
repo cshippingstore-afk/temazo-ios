@@ -11,9 +11,21 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.40'
+    MARKETING_VERSION: '1.2.41'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.41: paridad total con web para el sistema de importaciones:
+    # (1) ImportsScreen auto-refresca cada 20s si hay items pending/searching/
+    #     importing (mientras la pantalla siga abierta).
+    # (2) NotificationsScreen maneja 2 kinds nuevos: import_artist_done abre
+    #     ArtistScreen, import_track_done reproduce el track. Extrae "name"
+    #     del payload JSON para el texto ("Ya tenemos a X en Temazo").
+    # (3) NoResultsWithImportCta detecta " - "/"–"/"—" en la query y ofrece
+    #     dos botones (Artista + Cancion) cuando aplica; también mapea
+    #     NSError.code=429 → .rateLimited.
+    # Backend: _phase_process_imports.py inserta fila en user_notifications
+    # (kind=import_artist_done / import_track_done) cuando un import completa,
+    # ademas del email actual — cero cambio de esquema.
     # v1.2.40: VUELTA al modelo DISCRETO del player (peticion explicita del user).
     # Mini abajo o Full arriba, sin estados intermedios continuos. Se elimina
     # dragDelta + commitDragSnap + visibleExpandProgress. MiniPlayer y FullPlayer

@@ -458,6 +458,9 @@ struct MainScreen: View {
                             onPlay(track, [track], 0)
                         }
                     }
+                },
+                onOpenArtist: { aid in
+                    detailStack.append(.artist(id: aid, slug: nil, name: nil))
                 }
             )
         case .publicPlaylist(let pid, let slug):

@@ -66,24 +66,42 @@ struct NoResultsWithImportCta: View {
 
                 switch status {
                 case .idle, .error:
-                    Button {
-                        Task { await submit() }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("Solicitar")
-                            Image(systemName: "arrow.right")
+                    // v1.2.41: paridad con web — si la query contiene " - " (o "–"/"—")
+                    // se interpreta como "Artista - Canción" y se ofrecen 2 botones.
+                    let parts = query.components(separatedBy: CharacterSet(charactersIn: "-–—"))
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                    let hasTrackHint = parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty
+                    HStack(spacing: 6) {
+                        Button {
+                            Task { await submit(artistName: query, trackTitle: nil) }
+                        } label: {
+                            Text(hasTrackHint ? "Artista" : "Solicitar →")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .background(
+                                    LinearGradient(colors: [Color(red: 0.906, green: 0.298, blue: 0.545),
+                                                             Color(red: 0.659, green: 0.333, blue: 0.969)],
+                                                    startPoint: .topLeading, endPoint: .bottomTrailing),
+                                    in: Capsule()
+                                )
                         }
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(
-                            LinearGradient(colors: [Color(red: 0.906, green: 0.298, blue: 0.545),
-                                                     Color(red: 0.659, green: 0.333, blue: 0.969)],
-                                            startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: Capsule()
-                        )
+                        .buttonStyle(.plain)
+                        if hasTrackHint {
+                            Button {
+                                Task { await submit(artistName: parts[0], trackTitle: parts[1]) }
+                            } label: {
+                                Text("Canción")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Color(red: 0.906, green: 0.298, blue: 0.545))
+                                    .padding(.horizontal, 12).padding(.vertical, 8)
+                                    .overlay(
+                                        Capsule().stroke(Color(red: 0.906, green: 0.298, blue: 0.545), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.plain)
                 case .sending:
                     ProgressView().tint(.white).scaleEffect(0.9)
                 case .sent, .alreadyExists, .alreadyRequested:
@@ -136,12 +154,14 @@ struct NoResultsWithImportCta: View {
             .padding(.horizontal, 20)
     }
 
-    private func submit() async {
+    private func submit(artistName: String, trackTitle: String?) async {
         status = .sending
         do {
+            let type = (trackTitle?.isEmpty == false) ? "track" : "artist"
             let r = try await TemazoAPI.shared.requestImport(
-                type: "artist",
-                artistName: query.trimmingCharacters(in: .whitespacesAndNewlines)
+                type: type,
+                artistName: artistName.trimmingCharacters(in: .whitespacesAndNewlines),
+                trackTitle: trackTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             switch (r.status, r.error) {
             case ("pending", _):            status = .sent
@@ -154,10 +174,10 @@ struct NoResultsWithImportCta: View {
             }
         } catch {
             let ns = error as NSError
-            if ns.code == 401 {
-                status = .needLogin
-            } else {
-                status = .error(error.localizedDescription)
+            switch ns.code {
+            case 401: status = .needLogin
+            case 429: status = .rateLimited
+            default:  status = .error(error.localizedDescription)
             }
         }
     }
