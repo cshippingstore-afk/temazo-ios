@@ -7,19 +7,8 @@ struct FullPlayer: View {
     let onAddToPlaylist: () -> Void
     let onLoadPlaylist: () -> Void
 
-    // BETA v1.2.26 — Spotify-style drag continuo hacia abajo. Parent gestiona
-    // expandProgress 1→0 durante el drag. Si nil, mantiene comportamiento
-    // discreto (dy > 140 → onClose).
-    var onDragToCollapse: ((CGFloat) -> Void)? = nil
-    var onDragEnded: ((CGFloat) -> Void)? = nil  // velocity final para snap
-
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
-
-    // v1.2.37: dirección del gesto (decidida en el primer frame que supera umbral,
-    // fija durante todo el drag para evitar trompicones diagonales).
-    enum GestureDirection { case unknown, vertical, horizontal }
-    @GestureState private var gestureDirection: GestureDirection = .unknown
 
     @State private var showLyrics = false
     @State private var lyrics: [LyricLine] = []
@@ -86,49 +75,32 @@ struct FullPlayer: View {
                             .padding(.bottom, max(24, geo.safeAreaInsets.bottom + 12))
                     }
                 }
-                // Gestos Spotify:
-                //  - Swipe ↓ colapsa el FullPlayer (continuo)
-                //  - Swipe ←/→ (arriba del 75%) siguiente/anterior canción
+                // v1.2.46: gesto COPIADO literal del FullPlayer stable (simple + probado).
+                // Antes: 2 simultaneousGesture con @GestureState + minimumDistance:8
+                // → conflictos con botones internos (slider, play/pause). Ahora: 1
+                // .gesture exclusivo con minimumDistance:12 que decide vertical vs
+                // horizontal en onEnded.
                 //
-                // v1.2.39: dos .simultaneousGesture SEPARADOS — uno VERTICAL (drag
-                // continuo collapse) y otro HORIZONTAL (next/prev al soltar). No
-                // compiten entre sí (una direccion cada uno) y NO interfieren con
-                // los gestos internos (slider, botones) porque son simultaneous.
+                // Gestos:
+                //  - Swipe ↓ cierra FullPlayer (dy > 140)
+                //  - Swipe ←/→ (en el 75% superior) siguiente/anterior canción
                 .contentShape(Rectangle())
-                .simultaneousGesture(
-                    // VERTICAL: drag hacia abajo → collapse continuo
-                    DragGesture(minimumDistance: 8)
-                        .updating($gestureDirection) { val, state, _ in
-                            if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
-                                state = abs(val.translation.height) > abs(val.translation.width) ? .vertical : .horizontal
-                            }
-                        }
-                        .onChanged { val in
-                            // Solo vertical hacia abajo llama al collapse
-                            if gestureDirection == .vertical, val.translation.height > 0, let cb = onDragToCollapse {
-                                cb(val.translation.height)
-                            }
-                        }
-                        .onEnded { val in
-                            let dy = val.translation.height
-                            let vy = val.predictedEndTranslation.height - dy
-                            if gestureDirection == .vertical, dy > 0 {
-                                if let cb = onDragEnded { cb(vy) }
-                                else if dy > 140 { onClose() }
-                            }
-                        }
-                )
-                .simultaneousGesture(
-                    // HORIZONTAL: swipe → next/prev (solo al soltar, si arriba 75%)
-                    DragGesture(minimumDistance: 30)
+                .gesture(
+                    DragGesture(minimumDistance: 12)
                         .onEnded { val in
                             let dx = val.translation.width
                             let dy = val.translation.height
                             let startY = val.startLocation.y
-                            guard abs(dx) > abs(dy),
-                                  startY < geo.size.height * 0.75 else { return }
-                            if dx < -80 { player.next() }
-                            else if dx > 80 { player.prev() }
+                            // Vertical down — siempre cierra
+                            if abs(dy) > abs(dx), dy > 140 {
+                                onClose()
+                                return
+                            }
+                            // Horizontal — solo si empieza por encima del 75% (no choca con controles)
+                            if abs(dx) > abs(dy), startY < geo.size.height * 0.75 {
+                                if dx < -120 { player.next() }
+                                else if dx > 120 { player.prev() }
+                            }
                         }
                 )
                 .task(id: t.id) { await loadLyrics(trackId: t.id) }

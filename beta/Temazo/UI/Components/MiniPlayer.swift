@@ -13,19 +13,10 @@ struct MiniPlayer: View {
     let onAddToPlaylist: () -> Void
     let onLoadPlaylist: () -> Void   // no usado en UI (compat), gestionado por la pestaña Playlists
 
-    // BETA v1.2.26 — Spotify-style drag interactivo. Si estan set, el MiniPlayer
-    // reporta el drag delta al parent (que maneja expandProgress 0→1 en vivo).
-    // Si son nil, mantiene comportamiento discreto (umbral -80 → onExpand).
-    var onDragToExpand: ((CGFloat) -> Void)? = nil
-    var onDragEnded: ((CGFloat) -> Void)? = nil  // pasa velocity final
-
     @EnvironmentObject var player: Player
     @EnvironmentObject var favorites: FavoritesRepo
     @State private var dragV: CGFloat = 0
     @State private var dragH: CGFloat = 0
-    // v1.2.37: dirección del gesto fija durante todo el drag (evita trompicones)
-    enum DragDirection { case unknown, vertical, horizontal }
-    @GestureState private var dragDirection: DragDirection = .unknown
 
     var body: some View {
         guard let t = player.state.currentTrack else { return AnyView(EmptyView()) }
@@ -135,50 +126,35 @@ struct MiniPlayer: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .contentShape(Rectangle())
-                // v1.2.45: ORDEN CRÍTICO — los simultaneousGesture PRIMERO, luego
-                // onTapGesture. En iOS 17.4+ el orden inverso deja el tap pending
-                // indefinidamente esperando confirmación del drag (bug conocido
-                // SwiftUI). Con este orden el tap se dispara siempre que el drag
-                // no supere el minimumDistance:8.
-                //
-                // Gestos: swipe vertical hacia arriba expande (Spotify-style continuo si
-                // hay callbacks del parent), swipe horizontal cambia canción.
-                // v1.2.39: dos simultaneousGesture separados (paridad con FullPlayer).
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .updating($dragDirection) { val, state, _ in
-                            if state == .unknown, abs(val.translation.width) + abs(val.translation.height) > 8 {
-                                state = abs(val.translation.height) > abs(val.translation.width) ? .vertical : .horizontal
-                            }
-                        }
+                // v1.2.46: gesto COPIADO literal del MiniPlayer stable (simple + probado).
+                // Antes: 2 simultaneousGesture con dragDirection @GestureState y
+                // minimumDistance:8 → cualquier micro-toque se detectaba como drag
+                // y el tap NUNCA se disparaba (FullPlayer nunca expandía).
+                // Ahora: 1 solo .gesture exclusivo con minimumDistance:10 que decide
+                // vertical vs horizontal en onEnded via abs(dy) vs abs(dx). Tap
+                // funciona porque el gesture ni siquiera arranca a <10pt.
+                .onTapGesture { onExpand() }
+                // Swipe vertical hacia arriba expande, swipe horizontal cambia canción.
+                .gesture(
+                    DragGesture(minimumDistance: 10)
                         .onChanged { val in
                             dragV = val.translation.height
-                            // Solo vertical hacia arriba llama al expand
-                            if dragDirection == .vertical, val.translation.height < 0, let cb = onDragToExpand {
-                                cb(val.translation.height)
-                            }
+                            dragH = val.translation.width
                         }
-                        .onEnded { val in
-                            let dy = val.translation.height
-                            let vy = val.predictedEndTranslation.height - dy
-                            if dragDirection == .vertical, dy < 0 {
-                                if let cb = onDragEnded { cb(vy) }
-                                else if dy < -80 { onExpand() }
-                            }
-                            dragV = 0
-                        }
-                )
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 30)
                         .onEnded { val in
                             let dx = val.translation.width
                             let dy = val.translation.height
-                            guard abs(dx) > abs(dy) else { return }
-                            if dx < -80 { player.next() }
-                            else if dx > 80 { player.prev() }
+                            if abs(dy) > abs(dx) {
+                                // vertical
+                                if dy < -80 { onExpand() }
+                            } else {
+                                // horizontal
+                                if dx < -120 { player.next() }
+                                else if dx > 120 { player.prev() }
+                            }
+                            dragV = 0; dragH = 0
                         }
                 )
-                .onTapGesture { onExpand() }
             }
             .background(
                 ZStack {

@@ -11,9 +11,38 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.45'
+    MARKETING_VERSION: '1.2.46'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.46: PLAYER GESTOS = STABLE. FullPlayer expand + swipe navegacion arreglados.
+    # Diagnostico: user reporto "no funciona nada" en v1.2.45. Comparando con la
+    # Temazo estable (que SI funcionaba), la diferencia estaba en el modelo de
+    # gestos del MiniPlayer + FullPlayer.
+    #
+    # ROOT CAUSE (arrastrado desde v1.2.26 - v1.2.40, 15 versiones):
+    #   Beta usaba 2 .simultaneousGesture separados con @GestureState y
+    #   minimumDistance:8 (excesivamente sensible). En iOS 17.4+ cualquier
+    #   micro-movimiento del dedo detectaba drag → tap nunca se disparaba →
+    #   FullPlayer no expandia + navegacion inconsistente.
+    #
+    # FIX: gesto COPIADO literal del MiniPlayer/FullPlayer stable:
+    #   - MiniPlayer: 1 solo .gesture(DragGesture(minimumDistance:10)) que
+    #     decide vertical vs horizontal en onEnded via abs(dy) vs abs(dx).
+    #     .onTapGesture SI se dispara porque el gesture no arranca a <10pt.
+    #   - FullPlayer: 1 solo .gesture(DragGesture(minimumDistance:12)) con
+    #     misma logica.
+    #   - Eliminado codigo muerto: @GestureState gestureDirection/dragDirection,
+    #     callbacks onDragToExpand/onDragToCollapse/onDragEnded (spotify-style
+    #     continuo drag que se quito en v1.2.40 pero dejo el API).
+    #
+    # BACKEND VERIFICADO SANO:
+    #   /tmp 70% (margen), 748 tracks cacheados, warmer P=1 corriendo, cookie
+    #   fresca, yt-dlp 2026.07.04. yt_proxy responde 200 (cache-hit ~0.1s,
+    #   cache-miss ~3s primera vez).
+    #
+    # REPRODUCCION: identica a la Temazo stable (AVPlayer + yt_proxy) — la beta
+    # no cambia el player, solo arregla los gestos que la habian roto.
+    #
     # v1.2.45: ROLLBACK del refactor WebView (v1.2.43/44) + AUDIT COMPLETO.
     # Base = v1.2.42 (AVPlayer clasico funcional) + los siguientes fixes:
     #
