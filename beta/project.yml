@@ -11,9 +11,18 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.39'
+    MARKETING_VERSION: '1.2.40'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.40: VUELTA al modelo DISCRETO del player (peticion explicita del user).
+    # Mini abajo o Full arriba, sin estados intermedios continuos. Se elimina
+    # dragDelta + commitDragSnap + visibleExpandProgress. MiniPlayer y FullPlayer
+    # NO se tocan: sus callbacks onDragToExpand/onDragToCollapse/onDragEnded son
+    # opcionales, si se pasan nil usan comportamiento discreto ya existente
+    # (swipe up >80pt -> onExpand, swipe down >140pt -> onClose). La animacion
+    # spring del cambio expandProgress 0<->1 la hace .animation(spring, value:
+    # expandProgress) sobre el FullPlayer. Los gestos horizontales next/prev
+    # siguen funcionando (v1.2.39 los tenia en simultaneousGesture aparte).
     # v1.2.39: gestos completos + fluidos - dos simultaneousGesture separados:
     # uno VERTICAL (drag continuo collapse/expand) y otro HORIZONTAL (next/prev al
     # soltar). No compiten entre si (una direccion cada uno) ni interfieren con

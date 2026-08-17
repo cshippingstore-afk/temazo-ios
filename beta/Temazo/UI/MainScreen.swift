@@ -49,10 +49,10 @@ struct MainScreen: View {
     @State private var tab: AppTab = .home
     @State private var detailStack: [Detail] = []
     @State private var fullPlayerShown: Bool = false
-    // BETA v1.2.26 — Spotify-style: expandProgress 0=mini, 1=full. dragDelta se acumula
-    // durante el gesto y se aplica junto con expandProgress para la posición visible.
+    // v1.2.40: modelo discreto — mini abajo o full arriba, sin estados intermedios.
+    // expandProgress solo cambia por withAnimation en expandFullPlayer/collapseFullPlayer.
+    // NO hay drag continuo (dragDelta eliminado).
     @State private var expandProgress: CGFloat = 0
-    @State private var dragDelta: CGFloat = 0  // negative=arriba (expandiendo), positive=abajo (colapsando)
     @State private var addToPlaylistTrack: Track? = nil
     @State private var showLoadPlaylist: Bool = false
     @State private var showCompleteProfile: Bool = false
@@ -123,39 +123,32 @@ struct MainScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if player.state.currentTrack != nil {
+                    // v1.2.40: sin callbacks de drag continuo. MiniPlayer usa umbral
+                    // discreto (swipe up > 80pt → onExpand) porque los callbacks son nil.
                     MiniPlayer(
                         onExpand: { expandFullPlayer() },
                         onCoverClick: handleCoverClick,
                         onArtistClick: handleArtistClick,
                         onAddToPlaylist: handleAddToPlaylist,
-                        onLoadPlaylist: { showLoadPlaylist = true },
-                        // v1.2.36: sin animación implícita en cada frame del drag
-                        onDragToExpand: { dy in
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) { dragDelta = dy }
-                        },
-                        onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: false) }
+                        onLoadPlaylist: { showLoadPlaylist = true }
                     )
-                    .opacity(1 - visibleExpandProgress)  // fade out mientras se expande
+                    .opacity(1 - expandProgress)  // fade out sincronizado con el spring
                     .transition(.move(edge: .bottom))
                 }
 
-                // BETA v1.2.29 — bottomNav se oculta con el mismo drag Spotify:
-                // opacity fade + offset(y: progress * ~85pt) → se desliza fuera de pantalla.
-                // Cuando progress=0 → visible normal. progress=1 → oculto abajo.
+                // v1.2.40: bottomNav se anima con el mismo spring que expandProgress.
+                // Cuando expandProgress=0 → visible normal. expandProgress=1 → oculto abajo.
                 bottomNav
-                    .opacity(1 - visibleExpandProgress)
-                    .offset(y: visibleExpandProgress * 90)
-                    .allowsHitTesting(visibleExpandProgress < 0.15)
+                    .opacity(1 - expandProgress)
+                    .offset(y: expandProgress * 90)
+                    .allowsHitTesting(expandProgress < 0.15)
             }
 
-            // BETA v1.2.36: offset = (1 - progress) * screenHeight.
-            // .animation(nil, value: dragDelta) → NO animar cambios del drag continuo
-            //   (los cambios de dragDelta son a 60fps, deben seguir el dedo instantáneo
-            //   sin spring implícito que causa el efecto "escalonado" a golpes).
-            // .animation(spring, value: expandProgress) → SÍ animar cambios del snap
-            //   final (expand/collapse) con spring suave.
+            // v1.2.40: offset binario animado con spring. expandProgress solo cambia
+            // por withAnimation en expandFullPlayer/collapseFullPlayer — el propio
+            // .animation() se encarga de la interpolación suave. Sin drag continuo.
+            // FullPlayer usa umbral discreto (swipe down > 140pt → onClose) porque
+            // los callbacks onDragToCollapse/onDragEnded son nil.
             if player.state.currentTrack != nil {
                 GeometryReader { geo in
                     FullPlayer(
@@ -163,23 +156,15 @@ struct MainScreen: View {
                         onCoverClick: { collapseFullPlayer(); handleCoverClick() },
                         onArtistClick: { collapseFullPlayer(); handleArtistClick() },
                         onAddToPlaylist: { handleAddToPlaylist() },
-                        onLoadPlaylist: { showLoadPlaylist = true },
-                        onDragToCollapse: { dy in
-                            // Actualización SIN animation (drag continuo instantáneo).
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) { dragDelta = dy }
-                        },
-                        onDragEnded: { velocity in commitDragSnap(velocity: velocity, fromFull: true) }
+                        onLoadPlaylist: { showLoadPlaylist = true }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .offset(y: (1 - visibleExpandProgress) * geo.size.height)
-                    .animation(nil, value: dragDelta)
-                    .animation(.spring(response: 0.30, dampingFraction: 0.95), value: expandProgress)
+                    .offset(y: (1 - expandProgress) * geo.size.height)
+                    .animation(.spring(response: 0.34, dampingFraction: 0.95), value: expandProgress)
                 }
                 .ignoresSafeArea()
                 .zIndex(10)
-                .allowsHitTesting(visibleExpandProgress > 0.5)
+                .allowsHitTesting(expandProgress > 0.5)
             }
 
             if let txt = toastText {
@@ -199,23 +184,16 @@ struct MainScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: player.state.currentTrack != nil)
-        // Nota: NO animar expandProgress con .animation() global — los withAnimation
-        // explícitos en expandFullPlayer/collapseFullPlayer/commitDragSnap hacen el trabajo.
-        // Una animation global aquí interferiría con el drag continuo (que NO debe animar,
-        // debe seguir el dedo instantáneo).
+        // v1.2.40: expandProgress se anima explícitamente en expandFullPlayer /
+        // collapseFullPlayer con withAnimation. Ya no hay drag continuo que
+        // requiera evitar animation global.
         .animation(.easeInOut(duration: 0.2), value: toastText)
-        // BETA v1.2.34: al navegar (cualquier cambio de stack o de tab), colapsar el
-        // FullPlayer si estaba abierto o semi-abierto. Evita el bug donde el player
-        // queda superpuesto con offset intermedio al abrir una playlist/artist.
+        // v1.2.34: al navegar (stack o tab), colapsar el FullPlayer si estaba abierto.
         .onChange(of: detailStack.count) { _, _ in
-            if expandProgress > 0.001 || dragDelta != 0 {
-                collapseFullPlayer()
-            }
+            if expandProgress > 0.001 { collapseFullPlayer() }
         }
         .onChange(of: tab) { _, _ in
-            if expandProgress > 0.001 || dragDelta != 0 {
-                collapseFullPlayer()
-            }
+            if expandProgress > 0.001 { collapseFullPlayer() }
         }
         .sheet(item: $addToPlaylistTrack) { t in
             AddToPlaylistSheet(
@@ -649,71 +627,9 @@ struct MainScreen: View {
         }
     }
 
-    // MARK: - Spotify-style Player Expand (BETA v1.2.32)
-
-    private var screenHeight: CGFloat { UIScreen.main.bounds.height }
-
-    /// Altura combinada del mini player + bottomNav + safe area bottom. El
-    /// FullPlayer se posiciona con su TOP a esta distancia del bottom de la
-    /// pantalla cuando progress=0 (o sea, justo donde está el mini player).
-    /// Al progress=1 sube hasta cubrir toda la pantalla.
-    private var miniPlayerBottomInset: CGFloat {
-        // Mini player (~68) + BottomNav (~60) + safe area bottom (variable)
-        let safe = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.windows.first?.safeAreaInsets.bottom ?? 34
-        return 68 + 60 + safe
-    }
-
-    /// Distancia que recorre el FullPlayer desde donde está el mini hasta el top.
-    private var travelDistance: CGFloat {
-        screenHeight - miniPlayerBottomInset
-    }
-
-    /// Progress efectivo mientras hay un drag. Divisor = screenHeight (consistente
-    /// con el offset). Antes usaba travelDistance pero causaba bug: al progress=0
-    /// el offset era travelDistance en lugar de screenHeight → header visible.
-    private var visibleExpandProgress: CGFloat {
-        let deltaProg = -dragDelta / screenHeight
-        return max(0, min(1, expandProgress + deltaProg))
-    }
-
-    /// El FullPlayer se renderiza mientras hay progreso > 0 o drag activo.
-    private var fullPlayerVisible: Bool {
-        expandProgress > 0.001 || dragDelta < -0.5
-    }
-
-    /// Snap final tras soltar el drag. Umbral 40% para completar, o velocity
-    /// fuerte para abrir/cerrar directamente.
-    ///
-    /// CRÍTICO: consolidar el dragDelta en expandProgress ANTES de animar.
-    /// Si reseteas dragDelta=0 y a la vez expandProgress=target en el mismo
-    /// withAnimation, hay un frame donde el offset SALTA (porque dragDelta ya
-    /// es 0 pero expandProgress no ha llegado a target). El truco: primero
-    /// fijar expandProgress = visibleExpandProgress actual (sin animar) para
-    /// que el offset no cambie visualmente, después animar hasta el target.
-    private func commitDragSnap(velocity: CGFloat, fromFull: Bool) {
-        let effective = visibleExpandProgress
-        let target: CGFloat
-        if velocity < -300 {
-            target = 1
-        } else if velocity > 300 {
-            target = 0
-        } else {
-            target = effective > 0.4 ? 1 : 0
-        }
-        // Fase 1: consolidar sin animación (mismo offset visible, cambio de fuente).
-        expandProgress = effective
-        dragDelta = 0
-        // Fase 2: animar hasta el target. Damping alto (0.95) = sin rebote, ease-out.
-        withAnimation(.spring(response: 0.30, dampingFraction: 0.95)) {
-            expandProgress = target
-            fullPlayerShown = target > 0.5
-        }
-    }
+    // MARK: - Player Expand/Collapse (v1.2.40 — modelo discreto)
 
     private func expandFullPlayer() {
-        dragDelta = 0
         withAnimation(.spring(response: 0.34, dampingFraction: 0.95)) {
             expandProgress = 1
             fullPlayerShown = true
@@ -721,7 +637,6 @@ struct MainScreen: View {
     }
 
     private func collapseFullPlayer() {
-        dragDelta = 0
         withAnimation(.spring(response: 0.34, dampingFraction: 0.95)) {
             expandProgress = 0
             fullPlayerShown = false
