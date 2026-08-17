@@ -60,7 +60,7 @@ struct WelcomeScreen: View {
                     urls = Array(Set(urls))
                 }
                 covers = urls
-            } catch {}
+            } catch { print("[silent] \(error)") }
         }
     }
 

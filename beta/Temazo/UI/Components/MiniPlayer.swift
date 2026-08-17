@@ -135,11 +135,15 @@ struct MiniPlayer: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .contentShape(Rectangle())
-                .onTapGesture { onExpand() }
+                // v1.2.45: ORDEN CRÍTICO — los simultaneousGesture PRIMERO, luego
+                // onTapGesture. En iOS 17.4+ el orden inverso deja el tap pending
+                // indefinidamente esperando confirmación del drag (bug conocido
+                // SwiftUI). Con este orden el tap se dispara siempre que el drag
+                // no supere el minimumDistance:8.
+                //
                 // Gestos: swipe vertical hacia arriba expande (Spotify-style continuo si
                 // hay callbacks del parent), swipe horizontal cambia canción.
                 // v1.2.39: dos simultaneousGesture separados (paridad con FullPlayer).
-                // Vertical up = expand continuo. Horizontal = next/prev.
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .updating($dragDirection) { val, state, _ in
@@ -174,6 +178,7 @@ struct MiniPlayer: View {
                             else if dx > 80 { player.prev() }
                         }
                 )
+                .onTapGesture { onExpand() }
             }
             .background(
                 ZStack {

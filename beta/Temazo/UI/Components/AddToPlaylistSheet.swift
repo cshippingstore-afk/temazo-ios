@@ -133,7 +133,7 @@ struct AddToPlaylistSheet: View {
         do {
             let r = try await TemazoAPI.shared.playlists()
             playlists = r.playlists
-        } catch {}
+        } catch { print("[silent] \(error)") }
         loading = false
     }
 
@@ -146,7 +146,7 @@ struct AddToPlaylistSheet: View {
                 if r.ok {
                     onAdded(p.name)
                 }
-            } catch {}
+            } catch { print("[silent] \(error)") }
             addingId = nil
         }
     }
@@ -163,7 +163,7 @@ struct AddToPlaylistSheet: View {
                         onAdded(pl.name)
                     }
                 }
-            } catch {}
+            } catch { print("[silent] \(error)") }
             newName = ""
         }
     }

@@ -11,9 +11,40 @@ settings:
   base:
     SWIFT_VERSION: '5.10'
     DEVELOPMENT_TEAM: 4B8U4JJQ93
-    MARKETING_VERSION: '1.2.42'
+    MARKETING_VERSION: '1.2.45'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # v1.2.45: ROLLBACK del refactor WebView (v1.2.43/44) + AUDIT COMPLETO.
+    # Base = v1.2.42 (AVPlayer clasico funcional) + los siguientes fixes:
+    #
+    # FIX CRITICO — FullPlayer no expandia (bug arrastrado desde v1.2.36+):
+    #   MiniPlayer.swift: reordenar los .simultaneousGesture ANTES del .onTapGesture.
+    #   En iOS 17.4+ el orden inverso deja el tap pending indefinidamente
+    #   esperando confirmacion del drag. Ahora tap dispara siempre onExpand().
+    #
+    # BUGS P1 — codigo duplicado limpiado:
+    #   - Player.init YA NO llama beginReceivingRemoteControlEvents (AppDelegate
+    #     lo hace ANTES del init del singleton, dup causaba race en algunas
+    #     versiones de iOS con MPRemoteCommandCenter sin targets aun).
+    #   - OfflineOrchestrator.start(): quitado 2 resetAll() consecutivo (era resto
+    #     de v1.2.15 no borrado al añadir v1.2.16).
+    #   - MainScreen.task YA NO llama auth.refreshSession (TemazoApp.task ya lo
+    #     hace antes, evitando doble round-trip y potencial race).
+    #
+    # QUALITY P2:
+    #   - NowPlayingManager artworkCache: [String:MPMediaItemArtwork] → NSCache LRU
+    #     con countLimit=50. Antes crecia indefinido (leak progresivo por cover).
+    #   - Player.prewarmNext: max = min(5, queue.count-1) evita re-encolar mismos
+    #     ids via % cuando la cola tiene <5 tracks.
+    #   - TemazoShare.swift: windows.first (deprecado iOS 15+) → first(where isKeyWindow).
+    #   - 26 catch{} silenciosos en 14 archivos UI → catch { print("[silent] \(error)") }.
+    #     Antes ningun error API dejaba rastro en logs — imposible debug.
+    #
+    # BACKUPS por si algo va mal:
+    #   git tag v1.2.42-pre-webview  (base sin cambios)
+    #   git tag v1.2.44-pre-audit    (estado con WebView roto)
+    #   Rama webview-player          (experimento archivado, no mergear)
+    #
     # v1.2.42: buildProxyURL envia ?next=id1,id2,id3 con los siguientes 3 tracks
     # de la cola actual. El backend (yt_proxy.php v6, ya deployado) dispara
     # descargas background de esos tracks tras servir el actual — cuando el

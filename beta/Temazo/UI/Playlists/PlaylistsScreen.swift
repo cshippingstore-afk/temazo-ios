@@ -222,7 +222,7 @@ struct PlaylistsScreen: View {
         do {
             let resp = try await TemazoAPI.shared.playlists()
             playlists = resp.playlists
-        } catch {}
+        } catch { print("[silent] \(error)") }
         if let r = try? await TemazoAPI.shared.playlistsFollowing() {
             followedPlaylists = r.playlists
         }

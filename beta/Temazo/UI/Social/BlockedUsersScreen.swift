@@ -132,7 +132,7 @@ struct BlockedUsersScreen: View {
         do {
             let r = try await TemazoAPI.shared.usersBlocked()
             users = r.users
-        } catch {}
+        } catch { print("[silent] \(error)") }
         loading = false
     }
 
@@ -140,6 +140,6 @@ struct BlockedUsersScreen: View {
         do {
             _ = try await TemazoAPI.shared.userBlockToggle(targetId: u.id)
             await load()
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 }

@@ -503,14 +503,14 @@ struct AccountScreen: View {
             // Propagar avatar al store global → TopBar (y todo lo que observe
             // auth.avatarUrl) refresca al instante sin recargar.
             auth.setAvatarUrl(r.user?.displayAvatarUrl)
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 
     private func loadPlaylists() async {
         do {
             let r = try await TemazoAPI.shared.playlists()
             playlists = r.playlists
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 
     private func createPlaylist() {
@@ -520,7 +520,7 @@ struct AccountScreen: View {
             do {
                 let r = try await TemazoAPI.shared.playlistCreate(name: n)
                 if r.ok { await loadPlaylists(); await loadProfile() }
-            } catch {}
+            } catch { print("[silent] \(error)") }
             newPlaylistName = ""
         }
     }
@@ -533,7 +533,7 @@ struct AccountScreen: View {
             do {
                 _ = try await TemazoAPI.shared.playlistRename(p.id, name: n)
                 await loadPlaylists()
-            } catch {}
+            } catch { print("[silent] \(error)") }
             renameTarget = nil
         }
     }
@@ -544,7 +544,7 @@ struct AccountScreen: View {
             do {
                 _ = try await TemazoAPI.shared.playlistDelete(p.id)
                 await loadPlaylists(); await loadProfile()
-            } catch {}
+            } catch { print("[silent] \(error)") }
             deleteTarget = nil
         }
     }
@@ -555,7 +555,7 @@ struct AccountScreen: View {
             do {
                 let r = try await TemazoAPI.shared.usernameSet(n)
                 if r.ok { await loadProfile() }
-            } catch {}
+            } catch { print("[silent] \(error)") }
             usernameText = ""
         }
     }

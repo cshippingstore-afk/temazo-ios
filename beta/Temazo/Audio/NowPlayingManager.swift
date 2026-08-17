@@ -9,7 +9,14 @@ import UIKit
 final class NowPlayingManager {
     static let shared = NowPlayingManager()
     private var cancellables: Set<AnyCancellable> = []
-    private var artworkCache: [String: MPMediaItemArtwork] = [:]
+    // v1.2.45: NSCache LRU con límite 50 entries. Antes era [String: MPMediaItemArtwork]
+    // creciendo indefinido → memory leak progresivo cada cover distinta que sonaba.
+    // NSCache descarta los menos usados automáticamente cuando hay memory pressure.
+    private let artworkCache: NSCache<NSString, MPMediaItemArtwork> = {
+        let c = NSCache<NSString, MPMediaItemArtwork>()
+        c.countLimit = 50
+        return c
+    }()
 
     private init() {
         setupRemoteCommands()
@@ -86,7 +93,8 @@ final class NowPlayingManager {
         ]
 
         if let urlStr = track.coverUrl {
-            if let cached = artworkCache[urlStr] {
+            let key = urlStr as NSString
+            if let cached = artworkCache.object(forKey: key) {
                 info[MPMediaItemPropertyArtwork] = cached
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             } else {
@@ -95,7 +103,7 @@ final class NowPlayingManager {
                     Task { @MainActor in
                         guard let self else { return }
                         if let art {
-                            self.artworkCache[urlStr] = art
+                            self.artworkCache.setObject(art, forKey: key)
                             var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
                             current[MPMediaItemPropertyArtwork] = art
                             MPNowPlayingInfoCenter.default().nowPlayingInfo = current

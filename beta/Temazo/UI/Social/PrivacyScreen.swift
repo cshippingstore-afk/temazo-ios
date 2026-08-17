@@ -123,7 +123,7 @@ struct PrivacyScreen: View {
                 hideHis = p.hide_history == 1
                 priv = p.private_session == 1
             }
-        } catch {}
+        } catch { print("[silent] \(error)") }
         loaded = true
     }
 
@@ -137,7 +137,7 @@ struct PrivacyScreen: View {
                     hideHistory: hh,
                     privateSession: ps
                 )
-            } catch {}
+            } catch { print("[silent] \(error)") }
         }
     }
 }

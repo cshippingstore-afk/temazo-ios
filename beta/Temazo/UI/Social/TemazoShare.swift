@@ -34,8 +34,14 @@ enum TemazoShare {
     private static func present(items: [Any]) {
         let av = UIActivityViewController(activityItems: items, applicationActivities: nil)
         DispatchQueue.main.async {
-            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                  let root = scene.windows.first?.rootViewController else { return }
+            // v1.2.45: usar keyWindow explícito en vez de windows.first (deprecado iOS 15+)
+            guard let scene = UIApplication.shared.connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .first(where: { $0.activationState == .foregroundActive })
+                    ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene),
+                  let root = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController
+                    ?? scene.windows.first?.rootViewController
+            else { return }
             // Encuentra el top-most controller para evitar warnings
             var top: UIViewController = root
             while let presented = top.presentedViewController { top = presented }

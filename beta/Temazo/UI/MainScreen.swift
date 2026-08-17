@@ -282,7 +282,9 @@ struct MainScreen: View {
             // TopTracksRepo + NotificationsRepo + NowPlayingHeartbeat: start una vez al abrir la app.
             TopTracksRepo.shared.start()
             NowPlayingHeartbeat.shared.start()
-            await auth.refreshSession()
+            // v1.2.45: NO llamamos auth.refreshSession aquí — TemazoApp.task ya lo
+            // hizo ANTES de que MainScreen aparezca (2 llamadas simultáneas al
+            // arrancar generaban race + doble round-trip al backend).
             await syncFavs()
             await checkOnboarding()
             await checkProfileCompleteness()
@@ -654,7 +656,7 @@ struct MainScreen: View {
         do {
             let r = try await TemazoAPI.shared.favs()
             favorites.replaceAll(r.tracks.map { $0.id })
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 
     private func showToast(_ text: String) {

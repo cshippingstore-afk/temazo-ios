@@ -292,7 +292,7 @@ struct OnboardingScreen: View {
                     seen.insert(a.id)
                     collected.append(a)
                 }
-            } catch {}
+            } catch { print("[silent] \(error)") }
         }
         artists = collected
         step = 1
@@ -309,7 +309,7 @@ struct OnboardingScreen: View {
             do {
                 let r = try await TemazoAPI.shared.onboardingFinish()
                 if r.ok == true { break }
-            } catch {}
+            } catch { print("[silent] \(error)") }
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
         onFinish()

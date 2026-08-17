@@ -486,6 +486,6 @@ struct EditProfileScreen: View {
                 avatarUrl = nil
                 auth.setAvatarUrl(nil)  // limpia el TopBar
             }
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 }

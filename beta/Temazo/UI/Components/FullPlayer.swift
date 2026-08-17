@@ -405,7 +405,7 @@ struct FullPlayer: View {
             if let lrc = resp.synced, !lrc.isEmpty {
                 lyrics = LRCParser.parse(lrc)
             }
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 
     private func format(_ sec: Float) -> String {

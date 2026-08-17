@@ -31,7 +31,11 @@ final class Player: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        UIApplication.shared.beginReceivingRemoteControlEvents()
+        // v1.2.45: NO llamamos beginReceivingRemoteControlEvents aquí —
+        // AppDelegate.didFinishLaunchingWithOptions ya lo hace ANTES de que
+        // se instancie este singleton (más temprano en el ciclo de vida).
+        // Duplicarlo puede causar race en algunas versiones de iOS donde
+        // MPRemoteCommandCenter aún no tiene targets registrados.
     }
 
     func playTrack(_ track: Track, queue: [Track], index: Int, source: String? = nil) {
@@ -146,15 +150,19 @@ final class Player: NSObject, ObservableObject {
     ///  1) YouTubeExtractor (iPhone) → URL directa googlevideo cacheada localmente
     ///  2) Backend yt_resolve.php → para fallback proxy
     /// El play de next() es casi instantáneo si la URL ya está en el cache.
+    /// v1.2.45: max = min(5, queue.count - 1) — evita re-encolar los mismos ids
+    /// via `%` cuando la cola tiene <5 tracks.
     private func prewarmNext() {
         guard !state.queue.isEmpty else { return }
+        let maxOffset = min(5, state.queue.count - 1)
+        guard maxOffset > 0 else { return }
         var ids: [String] = []
-        for offset in 1...5 {
-            let idx = (state.index + offset) % state.queue.count
+        for offset in 1...maxOffset {
+            let idx = state.index + offset
+            guard idx < state.queue.count else { break }
             if let yt = state.queue[idx].youtubeId, !yt.isEmpty, !ids.contains(yt) {
                 ids.append(yt)
             }
-            if state.queue.count <= offset { break }
         }
         if !ids.isEmpty {
             // Canal 1 — iPhone extrae la URL directa de googlevideo (rápido)

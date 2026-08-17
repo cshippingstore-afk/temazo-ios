@@ -39,8 +39,7 @@ final class OfflineOrchestrator: ObservableObject {
         OfflineLibrary.shared.purgeCorrupted()
         // BETA v1.2.16: RESET total del circuit breaker al arrancar la app.
         // No arrastramos estado degraded de sesión anterior — user siempre empieza limpio.
-        ServiceHealth.shared.resetAll()
-        // BETA v1.2.15: reset ServiceHealth al arrancar — evitar arrastrar degraded state viejo
+        // (v1.2.45: quitado 2º resetAll duplicado que era resto de v1.2.15).
         ServiceHealth.shared.resetAll()
 
         // 1. BOOT: dispara sync inmediato en cuanto haya sesión + red viable.

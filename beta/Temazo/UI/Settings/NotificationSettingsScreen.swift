@@ -108,7 +108,7 @@ struct NotificationSettingsScreen: View {
         Task {
             do {
                 _ = try await TemazoAPI.shared.notifPrefsSet(kind: kind, enabled: enabled)
-            } catch {}
+            } catch { print("[silent] \(error)") }
         }
     }
 
@@ -116,7 +116,7 @@ struct NotificationSettingsScreen: View {
         do {
             let r = try await TemazoAPI.shared.notifPrefsGet()
             prefs = r.prefs
-        } catch {}
+        } catch { print("[silent] \(error)") }
         loaded = true
     }
 }

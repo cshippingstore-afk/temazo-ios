@@ -74,7 +74,7 @@ struct FavoritesScreen: View {
             do {
                 _ = try await TemazoAPI.shared.favToggle(t.id)
                 tracks.removeAll { $0.id == t.id }
-            } catch {}
+            } catch { print("[silent] \(error)") }
         }
     }
 

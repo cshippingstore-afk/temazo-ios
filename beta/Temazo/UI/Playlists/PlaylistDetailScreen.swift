@@ -284,6 +284,6 @@ struct PlaylistDetailScreen: View {
         do {
             _ = try await TemazoAPI.shared.playlistRemove(playlistId, trackId: t.id)
             tracks.removeAll { $0.id == t.id }
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 }

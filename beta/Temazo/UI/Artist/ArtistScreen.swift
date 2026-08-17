@@ -333,7 +333,7 @@ struct ArtistScreen: View {
         do {
             let r = try await TemazoAPI.shared.follows()
             following = r.artists.contains(where: { $0.id == aid })
-        } catch {}
+        } catch { print("[silent] \(error)") }
     }
 
     private func toggleFollow() {
@@ -348,7 +348,7 @@ struct ArtistScreen: View {
             do {
                 let r = try await TemazoAPI.shared.followToggle(artistId: aid)
                 if r.ok { following = r.following }
-            } catch {}
+            } catch { print("[silent] \(error)") }
             togglingFollow = false
         }
     }
